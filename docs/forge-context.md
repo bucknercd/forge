@@ -136,6 +136,34 @@ Move toward:
 - Challenge bad design decisions
 
 
+## Next TODO
 
-# Next TODO
+Implement `milestone-sync-state`.
 
+Goal:
+- reconcile `.system/milestone_state.json` against the milestones currently parsed from `docs/milestones.md`
+- ensure every parsed milestone has a state entry
+- remove stale state entries that no longer map to an existing milestone
+
+Requirements:
+- keep implementation minimal
+- keep sync logic separate from selection and execution
+- preserve the existing file-based state model
+- do not change milestone markdown during sync
+- if the state file does not exist, initialize it from parsed milestones
+- default missing entries to:
+  - `status: not_started`
+  - `attempts: 0`
+- add CLI support for `milestone-sync-state`
+- add tests for:
+  - missing state file initializes all milestones
+  - missing milestone entries are added
+  - existing valid entries are preserved
+  - stale state entries are removed
+  - CLI output is correct
+
+Notes:
+- do not introduce dependency resolution or milestone graph logic
+- do not move sync behavior into executor or selector
+- keep reconciliation as a small explicit operation
+- output should clearly report what changed or that state is already synchronized
