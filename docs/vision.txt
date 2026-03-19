@@ -1,0 +1,63 @@
+System Vision: Design-to-Build Engine
+
+Overview
+
+This system is a stateful engine that takes a high-level idea and turns it into a fully designed and implemented cloud system.
+
+It works in two main layers. The design layer defines architecture, decisions, and milestones. The execution layer implements those milestones using infrastructure, application code, and validation.
+
+The language model is treated as stateless. All real system state is stored in files inside the repository.
+
+Goals
+
+The system should support iterative system design starting from a rough idea. It should persist architecture, decisions, and milestones as files. It should generate infrastructure, application code, and tests. It should execute changes through a controlled loop with validation and retries. It should maintain auditability and reproducibility of all changes.
+
+System State
+
+All project state lives in files such as vision, requirements, architecture, decisions, and milestones. These files represent the source of truth for the system. Optionally there can be a structured system spec file to represent the architecture in a more machine-readable way.
+
+Two Layer Model
+
+The design layer is responsible for refining ideas into architecture, comparing options, recording decisions, and generating milestones. It does not directly modify implementation code.
+
+The execution layer is responsible for implementing one milestone at a time. It generates or modifies infrastructure, application code, and tests. It runs validation and retries on failure within limits.
+
+Milestone Workflow
+
+All work is broken into bounded milestones. Each milestone has an objective, a defined scope of what can change, validation criteria, and dependencies.
+
+Each milestone follows the same loop. First a plan is created. Then changes are made. Then validation is run. If validation fails, the system retries within limits. If validation succeeds, the milestone is complete.
+
+Component Model
+
+The system operates on components rather than just files. Examples of components include API services, Lambda functions, workers, databases, queues, Terraform modules, and Kubernetes workloads.
+
+Each component may produce application code, infrastructure configuration, tests, and deployment artifacts.
+
+Multi Backend Support
+
+The design layer remains mostly provider-agnostic. The execution layer can target different backends such as Terraform for AWS or GCP, Kubernetes with Helm or manifests, or serverless systems like Lambda.
+
+Validation Driven Development
+
+No change is considered complete unless it passes validation. Validation can include infrastructure validation commands, build steps, and tests. Failures are fed back into the system for retries.
+
+Persistent Runs
+
+All execution runs are recorded. Each run includes the original task, the generated plan, the changes made, the validation output, and a final summary. This enables reproducibility and debugging.
+
+Workflow
+
+The workflow starts with an idea. The system then goes through design to produce architecture and decisions. It generates milestones. For each milestone it plans, implements code and infrastructure, validates, and retries if needed. After all milestones are complete, it performs integration and end-to-end validation, followed by final hardening.
+
+Guardrails
+
+Design and execution are separated. The execution layer cannot silently change architecture. Changes are scoped and limited per milestone. Validation is required for success. All actions are recorded.
+
+v1 Scope
+
+The first version should focus on a narrow slice such as a single cloud provider or deployment model. It should support design, milestone generation, milestone execution, and local validation.
+
+Summary
+
+This system is not a chatbot or simple code generator. It is a system that designs, builds, and validates cloud systems using structured design artifacts and controlled execution loops.
