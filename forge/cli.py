@@ -220,10 +220,10 @@ class ForgeCLI:
             print("No milestones available.")
             return
 
-        state = state_repository.get(next_milestone["id"])
+        state = state_repository.get(next_milestone.id)
 
-        print(f"Next milestone: {next_milestone['id']}")
-        print(f"Objective: {next_milestone.get('objective', 'No objective provided')}")
+        print(f"Next milestone: {next_milestone.id}. {next_milestone.title}")
+        print(f"Objective: {next_milestone.objective or 'No objective provided'}")
         print(f"Status: {state['status']}")
 
 def main():

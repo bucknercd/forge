@@ -13,4 +13,14 @@ class MilestoneStateRepository:
 
     def get(self, milestone_id):
         state = self.load()
-        return state.get(str(milestone_id), {"status": "not_started", "attempts": 0})
+        value = state.get(str(milestone_id))
+
+        if isinstance(value, str):
+            # Backward compatibility for string format
+            return {"status": value, "attempts": 0}
+        elif isinstance(value, dict):
+            # Return dict format unchanged
+            return value
+        else:
+            # Default for missing entries
+            return {"status": "not_started", "attempts": 0}
