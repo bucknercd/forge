@@ -134,3 +134,8 @@ Move toward:
 - Keep everything file-based
 - Think like a systems engineer, not a framework builder
 - Challenge bad design decisions
+
+
+
+# Next TODO
+Here is my Forge project context from docs/forge-context.md. I want to continue building the next feature: milestone-next selection.
