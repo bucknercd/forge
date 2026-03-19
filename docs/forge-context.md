@@ -138,4 +138,27 @@ Move toward:
 
 
 # Next TODO
-Here is my Forge project context from docs/forge-context.md. I want to continue building the next feature: milestone-next selection.
+
+Implement `milestone-execute-next`.
+
+Goal:
+- reuse `MilestoneSelector` to find the next actionable milestone
+- if no milestone is available, exit cleanly with a clear message
+- if a milestone is available, pass its id into the existing execution path
+
+Requirements:
+- keep implementation minimal
+- do not duplicate execution logic
+- keep selection separate from execution
+- preserve file-based state model
+- add CLI support for `milestone-execute-next`
+- add tests for:
+  - no selectable milestone
+  - selected milestone is executed
+  - correct milestone id is passed to executor
+  - CLI output is correct
+
+Notes:
+- `milestone-next` is now implemented and committed
+- avoid overengineering
+- do not introduce planning/scoring/dependency logic yet
