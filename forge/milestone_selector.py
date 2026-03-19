@@ -1,6 +1,18 @@
-import json
-from pathlib import Path
+from forge.design_manager import DesignManager
+from forge.paths import Paths
 from forge.milestone_state import MilestoneStateRepository
+
+
+VALID_STATUSES = {
+    "not_started",
+    "in_progress",
+    "retry_pending",
+    "completed",
+    "failed",
+}
+
+SELECTABLE_STATUSES = {"not_started", "retry_pending"}
+
 
 class MilestoneSelector:
     def __init__(self, milestone_service, state_repository: MilestoneStateRepository):
@@ -8,16 +20,20 @@ class MilestoneSelector:
         self.state_repository = state_repository
 
     def get_next_milestone(self):
-        milestones = self.milestone_service.parse_milestones()
+        content = DesignManager.load_document(Paths.MILESTONES_FILE)
+        milestones = self.milestone_service.parse_milestones(content)
 
         for milestone in milestones:
-            milestone_id = str(milestone['id'])
+            milestone_id = str(milestone.id)
             milestone_state = self.state_repository.get(milestone_id)
+            status = milestone_state["status"]
 
-            if milestone_state['status'] not in {"not_started", "in_progress", "retry_pending", "completed", "failed"}:
-                raise ValueError(f"Unknown status '{milestone_state['status']}' for milestone {milestone_id}")
+            if status not in VALID_STATUSES:
+                raise ValueError(
+                    f"Unknown status '{status}' for milestone {milestone_id}"
+                )
 
-            if milestone_state['status'] in {"not_started", "retry_pending"}:
-                return {**milestone, "status": milestone_state['status']}
+            if status in SELECTABLE_STATUSES:
+                return milestone
 
         return None
