@@ -11,6 +11,8 @@ from forge.design_manager import MilestoneService
 from datetime import datetime
 import json
 from forge.executor import Executor
+from forge.milestone_selector import MilestoneSelector
+from forge.milestone_state import MilestoneStateRepository
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -206,6 +208,24 @@ class ForgeCLI:
 
         Executor.execute_milestone(milestone_id)
 
+    @staticmethod
+    def milestone_next():
+        milestone_service = MilestoneService()
+        state_repository = MilestoneStateRepository(Paths.SYSTEM_DIR / "milestone_state.json")
+        selector = MilestoneSelector(milestone_service, state_repository)
+
+        next_milestone = selector.get_next_milestone()
+
+        if next_milestone is None:
+            print("No milestones available.")
+            return
+
+        state = state_repository.get(next_milestone["id"])
+
+        print(f"Next milestone: {next_milestone['id']}")
+        print(f"Objective: {next_milestone.get('objective', 'No objective provided')}")
+        print(f"Status: {state['status']}")
+
 def main():
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -233,6 +253,8 @@ def main():
     # Retry milestone command
     subparsers.add_parser("milestone-retry", help="Retry a specific milestone").add_argument("id", type=int, help="Milestone ID")
 
+    subparsers.add_parser("milestone-next", help="Print the next milestone")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -253,5 +275,7 @@ def main():
         ForgeCLI.milestone_retry(args.id)
     elif args.command == "run-history":
         ForgeCLI.run_history()
+    elif args.command == "milestone-next":
+        ForgeCLI.milestone_next()
     else:
         parser.print_help()
