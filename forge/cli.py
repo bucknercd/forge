@@ -13,6 +13,7 @@ import json
 from forge.executor import Executor
 from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
+from forge.milestone_sync import sync_milestone_state
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -226,6 +227,17 @@ class ForgeCLI:
         print(f"Objective: {next_milestone.objective or 'No objective provided'}")
         print(f"Status: {state['status']}")
 
+    @staticmethod
+    def milestone_sync_state():
+        """Reconcile milestone_state.json against parsed milestones."""
+        result = sync_milestone_state()
+        print("Milestone state synchronized.")
+        print(f"Initialized: {result['initialized']}")
+        print(f"Added entries: {len(result['added'])}")
+        print(f"Removed entries: {len(result['removed'])}")
+        if result["unchanged"]:
+            print("State already synchronized.")
+
 def main():
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -254,6 +266,7 @@ def main():
     subparsers.add_parser("milestone-retry", help="Retry a specific milestone").add_argument("id", type=int, help="Milestone ID")
 
     subparsers.add_parser("milestone-next", help="Print the next milestone")
+    subparsers.add_parser("milestone-sync-state", help="Reconcile milestone state with parsed milestones")
 
     args = parser.parse_args()
 
@@ -277,6 +290,8 @@ def main():
         ForgeCLI.run_history()
     elif args.command == "milestone-next":
         ForgeCLI.milestone_next()
+    elif args.command == "milestone-sync-state":
+        ForgeCLI.milestone_sync_state()
     else:
         parser.print_help()
 

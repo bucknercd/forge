@@ -126,3 +126,121 @@ def test_milestone_state_tracking(tmp_path):
 
     # Validate the milestone-status output
     ForgeCLI.milestone_status()
+
+
+def _write_two_milestones(path):
+    path.write_text(
+        """
+# Milestones
+
+## Milestone 1: First Task
+- **Objective**: Complete the first task
+- **Scope**: Initial setup
+- **Validation**: Verify basics
+
+## Milestone 2: Second Task
+- **Objective**: Complete the second task
+- **Scope**: Advanced setup
+- **Validation**: Verify advanced features
+"""
+    )
+
+
+def test_milestone_sync_state_initializes_missing_file(tmp_path):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
+    _write_two_milestones(Paths.MILESTONES_FILE)
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+
+    ForgeCLI.milestone_sync_state()
+
+    state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+    assert state_file.exists()
+    state = json.loads(state_file.read_text())
+    assert state["1"] == {"status": "not_started", "attempts": 0}
+    assert state["2"] == {"status": "not_started", "attempts": 0}
+
+
+def test_milestone_sync_state_adds_missing_entries(tmp_path):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
+    _write_two_milestones(Paths.MILESTONES_FILE)
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+    Paths.SYSTEM_DIR.mkdir()
+
+    state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+    state_file.write_text(json.dumps({"1": {"status": "completed", "attempts": 1}}, indent=4))
+
+    ForgeCLI.milestone_sync_state()
+
+    state = json.loads(state_file.read_text())
+    assert state["1"] == {"status": "completed", "attempts": 1}
+    assert state["2"] == {"status": "not_started", "attempts": 0}
+
+
+def test_milestone_sync_state_preserves_valid_existing_entries(tmp_path):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
+    _write_two_milestones(Paths.MILESTONES_FILE)
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+    Paths.SYSTEM_DIR.mkdir()
+
+    state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+    original = {
+        "1": {"status": "completed", "attempts": 2},
+        "2": {"status": "retry_pending", "attempts": 1},
+    }
+    state_file.write_text(json.dumps(original, indent=4))
+
+    ForgeCLI.milestone_sync_state()
+
+    state = json.loads(state_file.read_text())
+    assert state == original
+
+
+def test_milestone_sync_state_removes_stale_entries(tmp_path):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
+    _write_two_milestones(Paths.MILESTONES_FILE)
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+    Paths.SYSTEM_DIR.mkdir()
+
+    state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "1": {"status": "in_progress", "attempts": 1},
+                "2": {"status": "not_started", "attempts": 0},
+                "999": {"status": "completed", "attempts": 3},
+            },
+            indent=4,
+        )
+    )
+
+    ForgeCLI.milestone_sync_state()
+
+    state = json.loads(state_file.read_text())
+    assert "999" not in state
+    assert "1" in state
+    assert "2" in state
+
+
+def test_milestone_sync_state_cli_output(tmp_path, capsys):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
+    _write_two_milestones(Paths.MILESTONES_FILE)
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+
+    ForgeCLI.milestone_sync_state()
+    first_out = capsys.readouterr().out
+    assert "Milestone state synchronized." in first_out
+    assert "Initialized: True" in first_out
+    assert "Added entries: 2" in first_out
+    assert "Removed entries: 0" in first_out
+
+    ForgeCLI.milestone_sync_state()
+    second_out = capsys.readouterr().out
+    assert "Initialized: False" in second_out
+    assert "Added entries: 0" in second_out
+    assert "Removed entries: 0" in second_out
+    assert "State already synchronized." in second_out
