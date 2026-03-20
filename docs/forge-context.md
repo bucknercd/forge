@@ -175,47 +175,71 @@ This enables iterative, state-aware project progression.
 
 
 ## Next TODO
-## Standalone CLI Project Mode
+## Explicit Project Bootstrap and Safe Command Behavior
 
-Forge should operate as a standalone CLI tool that can run against any project directory.
+Forge should support explicit project initialization and safer command behavior when run in directories that are not yet valid Forge projects.
 
 ### Goal
-Make Forge usable across future GitHub projects without copying Forge source code into each repository.
+Make Forge behave like a real CLI tool by adding a dedicated `forge init` command, project validation, and predictable handling for missing Forge files.
 
 ### Deliverables
-- Ensure Forge resolves project paths from the current working directory
-- Add automatic project structure initialization for required directories:
+- Add a real `forge init` command
+- `forge init` should create required directories:
   - `docs/`
   - `.system/`
   - `artifacts/`
-- Confirm or refactor path handling so Forge does not depend on its own source repo layout
-- Add/install a real CLI entry point such as:
-  - `forge status`
-  - `forge milestone-next`
-  - `forge execute-next`
-- Ensure commands work when run from a separate target project directory
+- `forge init` should create required baseline files if missing:
+  - `docs/vision.txt`
+  - `docs/requirements.md`
+  - `docs/architecture.md`
+  - `docs/decisions.md`
+  - `docs/milestones.md`
+  - `.system/run_history.log`
+- Add centralized project validation logic
+- Add a way to determine whether the current directory is a valid Forge project
+- Refactor command behavior so non-init commands do not silently create a full project unless that is intentionally desired
+- Ensure commands fail clearly and helpfully when required project files are missing
+- Show actionable guidance such as suggesting `forge init`
 
 ### Rules
-- Forge source code should live in its own repo/package
-- Target projects should only need Forge-managed folders/files, not embedded Forge source code
-- Use `Path.cwd()` or equivalent as the project root
-- Keep CLI thin and keep path logic centralized
+- Keep CLI thin
+- Keep project validation and initialization logic centralized
+- Do not duplicate path or bootstrap logic across commands
+- Preserve minimal standard-library-only design
+- Prefer explicit initialization over surprising side effects
+
+### Command behavior expectations
+- `forge init`
+  - initializes the current working directory as a Forge project
+  - creates missing directories and baseline files
+  - does not overwrite existing files
+- `forge status`
+  - should work safely in initialized projects
+  - should show a clear message if run outside a Forge project
+- `forge milestone-next`
+  - should fail clearly if project files are missing or project is not initialized
+- `forge execute-next`
+  - should fail clearly if project files are missing or project is not initialized
 
 ### Tests
 Unit tests:
-- path resolution uses project working directory
-- ensure-structure creates required directories if missing
+- project validation returns true for a valid initialized project
+- project validation returns false for a non-Forge directory
+- init creates all required directories
+- init creates all required files without overwriting existing content
 
 Integration tests:
-- run Forge services against a temporary project directory
-- verify required folders are created automatically
-- verify status / milestone-next / execute-next operate against that temp project
+- run `forge init` inside a temporary directory
+- verify all required directories/files are created
+- verify `status` works after init
+- verify non-init commands produce clear errors before init
+- verify repeated `forge init` is safe and idempotent
 
 ### Constraints
 - Python standard library only
 - no frameworks
 - minimal clean changes
-- no large packaging rewrite unless necessary
+- no large architectural rewrite unless necessary
 
 ### Design intent
-This step makes Forge a reusable tool for future repositories instead of a one-off implementation inside its own codebase.
+This step makes Forge safer and more predictable by separating project bootstrap from normal command execution.

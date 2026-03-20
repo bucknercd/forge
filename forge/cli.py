@@ -27,7 +27,7 @@ class ForgeCLI:
     @staticmethod
     def init():
         """Bootstrap expected directories and files if missing."""
-        Paths.DOCS_DIR.mkdir(exist_ok=True)
+        Paths.ensure_project_structure()
         for file in [
             Paths.VISION_FILE,
             Paths.REQUIREMENTS_FILE,
@@ -38,8 +38,6 @@ class ForgeCLI:
             if not file.exists():
                 file.touch()
                 print(f"Created: {file}")
-        # Ensure runtime directory exists before touching files under it.
-        Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
         if not Paths.RUN_HISTORY_FILE.exists():
             Paths.RUN_HISTORY_FILE.touch()
             print(f"Created: {Paths.RUN_HISTORY_FILE}")
@@ -286,6 +284,8 @@ class ForgeCLI:
             print(f"Milestone ID: {milestone_id}")
 
 def main():
+    Paths.refresh()
+    Paths.ensure_project_structure()
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
     subparsers = parser.add_subparsers(dest="command")
 

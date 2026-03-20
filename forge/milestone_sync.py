@@ -19,6 +19,7 @@ def sync_milestone_state() -> dict:
     - removed: list of stale milestone ids removed from state
     - unchanged: whether no add/remove changes were needed
     """
+    Paths.ensure_project_structure()
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
     milestones = MilestoneService.list_milestones()
     expected_ids = {str(milestone.id) for milestone in milestones}
@@ -45,7 +46,6 @@ def sync_milestone_state() -> dict:
     for milestone_id in removed:
         del current_state[milestone_id]
 
-    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
     with state_file.open("w", encoding="utf-8") as file:
         json.dump(current_state, file, indent=4)
 
