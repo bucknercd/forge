@@ -82,7 +82,8 @@ def test_milestone_start_with_workflow(tmp_path):
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
     assert state_file.exists()
     state = json.loads(state_file.read_text())
-    assert state["1"] == "in_progress"
+    assert state["1"]["status"] == "in_progress"
+    assert state["1"]["attempts"] == 0
 
     # Validate the run history
     with Paths.RUN_HISTORY_FILE.open("r", encoding="utf-8") as file:
@@ -121,7 +122,8 @@ def test_milestone_state_tracking(tmp_path):
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
     assert state_file.exists()
     state = json.loads(state_file.read_text())
-    assert state["1"] == "in_progress"
+    assert state["1"]["status"] == "in_progress"
+    assert state["1"]["attempts"] == 0
     assert state.get("2") == None  # Milestone 2 should not be started yet
 
     # Validate the milestone-status output

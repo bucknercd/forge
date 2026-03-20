@@ -34,6 +34,34 @@ def test_parse_milestones():
     assert milestones[1].scope == "Support reading and writing the `vision.txt` file."
     assert milestones[1].validation == "Verify that the vision can be loaded, edited, and saved."
 
+
+def test_parse_milestones_with_dependencies():
+    content = """# Milestones
+
+## Milestone 1: Prerequisite
+- **Objective**: Do the prerequisite
+- **Scope**: Scope for prereq
+- **Validation**: Validate prereq
+
+## Milestone 2: Dependent
+- **Depends On**: 1
+- **Objective**: Do dependent work
+- **Scope**: Scope for dependent
+- **Validation**: Validate dependent
+
+## Milestone 3: Dependent Again
+- **Depends On**: 1, 2
+- **Objective**: Do dependent again
+- **Scope**: Scope for dependent again
+- **Validation**: Validate dependent again
+"""
+    milestones = MilestoneService.parse_milestones(content)
+
+    assert len(milestones) == 3
+    assert milestones[0].depends_on == []
+    assert milestones[1].depends_on == [1]
+    assert milestones[2].depends_on == [1, 2]
+
 def test_list_milestones(tmp_path):
     test_file = tmp_path / "milestones.md"
     test_file.write_text("""# Milestones

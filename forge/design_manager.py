@@ -4,6 +4,7 @@ from pathlib import Path
 from forge.repository import FileRepository
 from typing import List, Optional
 from forge.paths import Paths
+import re
 
 class DesignManager:
     @staticmethod
@@ -15,15 +16,29 @@ class DesignManager:
         FileRepository.write_file(path, content)
 
 class Milestone:
-    def __init__(self, id: int, title: str, objective: str, scope: str, validation: str):
+    def __init__(
+        self,
+        id: int,
+        title: str,
+        objective: str,
+        scope: str,
+        validation: str,
+        depends_on: List[int] | None = None,
+    ):
         self.id = id
         self.title = title
         self.objective = objective
         self.scope = scope
         self.validation = validation
+        self.depends_on = depends_on or []
 
     def __str__(self):
-        return f"Milestone {self.id}: {self.title}\nObjective: {self.objective}\nScope: {self.scope}\nValidation: {self.validation}"
+        return (
+            f"Milestone {self.id}: {self.title}\n"
+            f"Objective: {self.objective}\n"
+            f"Scope: {self.scope}\n"
+            f"Validation: {self.validation}"
+        )
 
 class MilestoneService:
     @staticmethod
@@ -51,6 +66,12 @@ class MilestoneService:
                 current_milestone.scope = line.split(":", 1)[1].strip()
             elif current_milestone and line.startswith("- **Validation**:"):
                 current_milestone.validation = line.split(":", 1)[1].strip()
+            elif current_milestone and line.startswith("- **Depends On**:"):
+                # Accept flexible formatting like: "1, 2", "[1,2]", "1"
+                deps_text = line.split(":", 1)[1].strip()
+                current_milestone.depends_on = [
+                    int(m.group(0)) for m in re.finditer(r"\d+", deps_text)
+                ]
 
         if current_milestone:
             milestones.append(current_milestone)

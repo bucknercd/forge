@@ -135,35 +135,87 @@ Move toward:
 - Think like a systems engineer, not a framework builder
 - Challenge bad design decisions
 
+## Testing Model
 
-## Next TODO
+Forge uses layered testing to validate system behavior.
 
-Implement `milestone-sync-state`.
+### Unit tests
+- Validate pure logic:
+  - milestone parsing
+  - state transitions
+  - dependency resolution
+  - validation rules
+  - milestone selection
 
-Goal:
-- reconcile `.system/milestone_state.json` against the milestones currently parsed from `docs/milestones.md`
-- ensure every parsed milestone has a state entry
-- remove stale state entries that no longer map to an existing milestone
+### Integration tests
+- Validate end-to-end system behavior through core services
+- Use real file-based state and artifacts
+- Call services directly (Executor, MilestoneService, etc.)
+- Do NOT rely on CLI invocation
 
-Requirements:
-- keep implementation minimal
-- keep sync logic separate from selection and execution
-- preserve the existing file-based state model
-- do not change milestone markdown during sync
-- if the state file does not exist, initialize it from parsed milestones
-- default missing entries to:
-  - `status: not_started`
-  - `attempts: 0`
-- add CLI support for `milestone-sync-state`
-- add tests for:
-  - missing state file initializes all milestones
-  - missing milestone entries are added
-  - existing valid entries are preserved
-  - stale state entries are removed
-  - CLI output is correct
+### CLI tests
+- Minimal smoke tests only
+- Validate commands run successfully and produce expected output
+- Do not use CLI as primary testing interface
 
-Notes:
-- do not introduce dependency resolution or milestone graph logic
-- do not move sync behavior into executor or selector
-- keep reconciliation as a small explicit operation
-- output should clearly report what changed or that state is already synchronized
+### Design intent
+Testing should validate system behavior, not interface behavior.
+The CLI is a thin wrapper and should not be the primary integration boundary.
+
+## Orchestration
+
+Forge supports a high-level execution loop via `execute-next`.
+
+- Automatically selects the next eligible milestone
+- Executes and validates it
+- Updates runtime state
+- Reports outcome
+
+This enables iterative, state-aware project progression.
+
+
+### Next TODO
+## LLM-Backed Execution
+
+Forge should integrate an LLM into the execution loop to enable iterative implementation.
+
+### Goal
+Enhance milestone execution so that:
+- an LLM generates implementation output
+- validation (tests) provides feedback
+- failures are used to drive retries
+
+### Deliverables
+- Add an `LLMClient` abstraction:
+  - simple interface: `generate(prompt: str) -> str`
+- Implement prompt construction:
+  - milestone objective
+  - scope
+  - validation criteria
+  - relevant context (minimal)
+- Integrate LLM into execution flow:
+  - replace placeholder result generation with LLM output
+- Capture validation failures:
+  - extract test errors
+  - include them in retry prompts
+- Update retry loop:
+  - use failure feedback to improve subsequent attempts
+
+### Rules
+- LLM is a proposal generator only
+- validation remains the source of truth
+- do not allow LLM to modify runtime state directly
+- keep prompts minimal and focused
+
+### Tests
+- mock LLM responses for deterministic testing
+- test retry flow with simulated failures
+- ensure execution loop remains stable without real LLM calls
+
+### Constraints
+- no frameworks
+- minimal abstraction
+- keep system deterministic and testable
+
+### Design intent
+This step transforms Forge from a milestone executor into an iterative design + implementation engine driven by validation feedback.

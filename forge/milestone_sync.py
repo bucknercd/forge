@@ -3,6 +3,7 @@ from pathlib import Path
 
 from forge.design_manager import MilestoneService
 from forge.paths import Paths
+from forge.milestone_state import normalize_milestone_state_value
 
 
 DEFAULT_ENTRY = {"status": "not_started", "attempts": 0}
@@ -28,6 +29,10 @@ def sync_milestone_state() -> dict:
     else:
         with state_file.open("r", encoding="utf-8") as file:
             current_state = json.load(file)
+
+    # Normalize any legacy/non-uniform entries in the existing state file.
+    for k in list(current_state.keys()):
+        current_state[k] = normalize_milestone_state_value(current_state[k])
 
     added = []
     for milestone_id in sorted(expected_ids, key=int):

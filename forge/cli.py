@@ -14,6 +14,7 @@ from forge.executor import Executor
 from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
 from forge.milestone_sync import sync_milestone_state
+from forge.milestone_state import normalize_milestone_state_value
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -48,7 +49,11 @@ class ForgeCLI:
         state_file = Paths.SYSTEM_DIR / "milestone_state.json"
         if state_file.exists():
             with state_file.open("r", encoding="utf-8") as file:
-                return json.load(file)
+                raw_state = json.load(file)
+                normalized = {}
+                for k, v in raw_state.items():
+                    normalized[k] = normalize_milestone_state_value(v)
+                return normalized
         return {}
 
     @staticmethod
@@ -179,6 +184,10 @@ class ForgeCLI:
                 state = {}
 
             state[str(milestone_id)] = "in_progress"
+            state[str(milestone_id)] = {
+                "status": "in_progress",
+                "attempts": 0,
+            }
             with state_file.open("w", encoding="utf-8") as file:
                 json.dump(state, file, indent=4)
 
@@ -211,8 +220,8 @@ class ForgeCLI:
         with state_file.open("r", encoding="utf-8") as file:
             state = json.load(file)
 
-        milestone_state = state.get(str(milestone_id))
-        if not milestone_state or milestone_state["status"] != "retry_pending":
+        milestone_state = normalize_milestone_state_value(state.get(str(milestone_id)))
+        if milestone_state["status"] != "retry_pending":
             print("Milestone is not in a retryable state.")
             return
 
@@ -224,10 +233,16 @@ class ForgeCLI:
         state_repository = MilestoneStateRepository(Paths.SYSTEM_DIR / "milestone_state.json")
         selector = MilestoneSelector(milestone_service, state_repository)
 
-        next_milestone = selector.get_next_milestone()
+        next_milestone, report = selector.get_next_milestone_with_report()
 
         if next_milestone is None:
-            print("No milestones available.")
+            kind = report.get("kind")
+            if kind == "all_complete":
+                print("All milestones completed.")
+            elif kind == "in_progress":
+                print("Progress is already in progress.")
+            else:
+                print("Progress is blocked by failed/unmet prerequisites.")
             return
 
         state = state_repository.get(next_milestone.id)
@@ -251,6 +266,17 @@ class ForgeCLI:
             print(f"Added entries: {len(result['added'])}")
         if result["removed"]:
             print(f"Removed entries: {len(result['removed'])}")
+
+    @staticmethod
+    def execute_next():
+        """Execute the next eligible milestone in one orchestration step."""
+        result = Executor.execute_next()
+        outcome = result.get("outcome")
+        milestone_id = result.get("milestone_id")
+        print(result.get("message", ""))
+        if milestone_id is not None and outcome in {"executed", "complete"}:
+            # Provide a tiny bit of context without leaking orchestration internals.
+            print(f"Milestone ID: {milestone_id}")
 
 def main():
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
@@ -281,6 +307,7 @@ def main():
 
     subparsers.add_parser("milestone-next", help="Print the next milestone")
     subparsers.add_parser("milestone-sync-state", help="Reconcile milestone state with parsed milestones")
+    subparsers.add_parser("execute-next", help="Execute the next eligible milestone")
 
     args = parser.parse_args()
 
@@ -306,6 +333,8 @@ def main():
         ForgeCLI.milestone_next()
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
+    elif args.command == "execute-next":
+        ForgeCLI.execute_next()
     else:
         parser.print_help()
 

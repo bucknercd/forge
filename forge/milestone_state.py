@@ -1,6 +1,32 @@
 import json
 from pathlib import Path
 
+
+def normalize_milestone_state_value(value):
+    """
+    Normalize milestone state JSON value into:
+      { "status": <str>, "attempts": <int> }
+
+    Supports legacy values where the status was stored as a string.
+    """
+    if value is None:
+        return {"status": "not_started", "attempts": 0}
+
+    if isinstance(value, str):
+        return {"status": value, "attempts": 0}
+
+    if isinstance(value, dict):
+        status = value.get("status", "not_started")
+        attempts = value.get("attempts", 0)
+        try:
+            attempts_int = int(attempts)
+        except (TypeError, ValueError):
+            attempts_int = 0
+        return {"status": status, "attempts": attempts_int}
+
+    return {"status": "not_started", "attempts": 0}
+
+
 class MilestoneStateRepository:
     def __init__(self, state_file: Path):
         self.state_file = state_file
@@ -14,13 +40,4 @@ class MilestoneStateRepository:
     def get(self, milestone_id):
         state = self.load()
         value = state.get(str(milestone_id))
-
-        if isinstance(value, str):
-            # Backward compatibility for string format
-            return {"status": value, "attempts": 0}
-        elif isinstance(value, dict):
-            # Return dict format unchanged
-            return value
-        else:
-            # Default for missing entries
-            return {"status": "not_started", "attempts": 0}
+        return normalize_milestone_state_value(value)
