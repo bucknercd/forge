@@ -175,56 +175,59 @@ This enables iterative, state-aware project progression.
 
 
 ## Next TODO
-## Milestone Structure Validation and Parsing Hardening
+## Structured Run History Tracking
 
-Forge should validate milestone structure more explicitly so milestone-driven commands operate on predictable, well-formed milestone definitions.
+Forge should record structured execution history for each milestone run, making execution observable and debuggable.
 
 ### Goal
-Make milestone parsing and execution safer by enforcing a minimal milestone structure and reporting malformed milestone definitions clearly.
+Make `.system/run_history.log` a meaningful, structured record of milestone execution attempts.
 
 ### Deliverables
-- Add centralized milestone validation logic
-- Define a minimal valid milestone structure
-- Detect malformed or incomplete milestone blocks in `docs/milestones.md`
-- Refactor milestone parsing flow so `milestone-next` and `execute-next` depend on validated milestone data
-- Improve error reporting for invalid milestone definitions
-- Keep milestone parsing and validation logic centralized and reusable
-
-### Minimal valid milestone structure
-A milestone should include at least:
-- a recognizable milestone heading, such as:
-  - `## Milestone 1: Title`
-- an objective field
-- optional scope/validation fields may remain optional for now unless already required elsewhere
+- Add centralized run-history recording logic
+- Record an entry for every execution attempt (success or failure)
+- Each run entry should include:
+  - timestamp
+  - milestone id
+  - milestone title
+  - execution status (success / failure)
+  - optional error message (for failures)
+- Ensure append-only behavior
+- Keep run history machine-readable (JSON lines or similar format)
 
 ### Rules
 - Keep CLI thin
-- Do not duplicate milestone validation logic across commands
+- Do not duplicate run-history logic
 - Use Python standard library only
-- Prefer simple deterministic parsing over flexible but fragile parsing
-- Preserve compatibility with current milestone style where practical
+- Preserve append-only writes
+- Keep entries deterministic and consistent
 
-### Command behavior expectations
-- `forge milestone-next`
-  - should ignore malformed milestones only if that is explicitly intended
-  - otherwise should fail clearly when milestone definitions are invalid
-- `forge execute-next`
-  - should fail clearly if the next milestone is malformed or incomplete
-- `forge status`
-  - may report milestone validation issues as part of readiness output if practical
+### Suggested format
+Each line in `.system/run_history.log` should be a JSON object:
+{
+  "timestamp": "...",
+  "milestone_id": 1,
+  "title": "...",
+  "status": "success" | "failure",
+  "error": "..." (optional)
+}
+
+### Behavior expectations
+- Every call to execute-next or execute-milestone writes a run entry
+- Successful execution writes a success entry
+- Failed execution writes a failure entry with error context
+- Decision recording remains separate and only occurs on success
 
 ### Tests
 Unit tests:
-- valid milestone blocks parse successfully
-- malformed milestone headings are detected
-- milestones missing objective are detected
-- multiple milestones parse deterministically
-- validation errors are reported clearly
+- run entry is written in expected format
+- repeated runs append entries
+- failure includes error message
+- success excludes error field
 
 Integration tests:
-- temp project with valid milestones supports `milestone-next`
-- temp project with malformed milestones produces clear errors
-- temp project with missing objective prevents execution cleanly
+- execute milestone in temp project → verify log entry created
+- execute failing milestone → verify failure entry written
+- repeated runs produce multiple entries
 
 ### Constraints
 - Python standard library only
@@ -232,4 +235,4 @@ Integration tests:
 - no large rewrite unless necessary
 
 ### Design intent
-This step makes milestone-based workflows reliable by ensuring Forge operates on validated milestone definitions instead of loosely structured markdown.
+This step makes Forge observable and debuggable by introducing structured execution history alongside decision history.

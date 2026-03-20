@@ -5,6 +5,7 @@ from forge.design_manager import MilestoneService
 from forge.run_history import RunHistory
 from forge.models import RunHistoryEntry
 from forge.validator import Validator
+from forge.decision_tracker import DecisionTracker
 from forge.milestone_state import normalize_milestone_state_value
 from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
@@ -199,6 +200,13 @@ class Executor:
 
             # Update state to completed
             milestone_state["status"] = "completed"
+
+            # Record append-only decision history for successful execution.
+            DecisionTracker.append_milestone_success_decision(
+                milestone_id=milestone_id,
+                milestone_title=milestone.title,
+                summary=str(result_payload.get("summary", "Execution completed successfully.")),
+            )
         else:
             if milestone_state["attempts"] < MAX_RETRIES:
                 milestone_state["status"] = "retry_pending"

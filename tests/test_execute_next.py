@@ -225,3 +225,23 @@ def test_execute_next_resume_after_prereq_recovery(tmp_path):
     third = Executor.execute_next()
     assert third["milestone_id"] == 2
     assert third["outcome"] == "complete"
+
+
+def test_repeated_successful_executions_append_decisions(tmp_path):
+    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
+    _write_two_simple_milestones(Paths.MILESTONES_FILE)
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+    Paths.SYSTEM_DIR.mkdir()
+    Paths.DOCS_DIR = tmp_path / "docs"
+    Paths.DECISIONS_FILE = Paths.DOCS_DIR / "decisions.md"
+    Paths.DECISIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.DECISIONS_FILE.write_text("# Decisions\n", encoding="utf-8")
+
+    ForgeCLI.milestone_sync_state()
+    Executor.execute_next()  # milestone 1 success
+    first_content = Paths.DECISIONS_FILE.read_text(encoding="utf-8")
+    assert first_content.count("Execution outcome: completed") == 1
+
+    Executor.execute_next()  # milestone 2 success
+    second_content = Paths.DECISIONS_FILE.read_text(encoding="utf-8")
+    assert second_content.count("Execution outcome: completed") == 2

@@ -34,3 +34,31 @@ def test_append_decision(tmp_path):
     finally:
         # Restore the original path
         Paths.DECISIONS_FILE = original_path
+
+
+def test_repeated_appends_preserve_existing_content(tmp_path):
+    decisions_file = tmp_path / "decisions.md"
+    original_path = Paths.DECISIONS_FILE
+    Paths.DECISIONS_FILE = decisions_file
+    try:
+        decision1 = Decision(
+            title="First",
+            context="C1",
+            decision="D1",
+            rationale="R1",
+            timestamp=datetime.now(),
+        )
+        decision2 = Decision(
+            title="Second",
+            context="C2",
+            decision="D2",
+            rationale="R2",
+            timestamp=datetime.now(),
+        )
+        DecisionTracker.append_decision(decision1)
+        DecisionTracker.append_decision(decision2)
+        content = decisions_file.read_text(encoding="utf-8")
+        assert "## First" in content
+        assert "## Second" in content
+    finally:
+        Paths.DECISIONS_FILE = original_path
