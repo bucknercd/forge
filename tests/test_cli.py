@@ -17,7 +17,7 @@ def test_status(tmp_path):
     ForgeCLI.status()
 
 
-def test_init_creates_system_dir_and_milestone_state(tmp_path, capsys):
+def test_init_creates_system_dir_and_baseline_files(tmp_path, capsys):
     Paths.DOCS_DIR = tmp_path / "docs"
     Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
     Paths.VISION_FILE = Paths.DOCS_DIR / "vision.txt"
@@ -33,10 +33,12 @@ def test_init_creates_system_dir_and_milestone_state(tmp_path, capsys):
 
     # Validate system directory
     assert Paths.SYSTEM_DIR.exists()
-    # Validate state file initialized
-    state_file = Paths.SYSTEM_DIR / "milestone_state.json"
-    assert state_file.exists()
-    assert json.loads(state_file.read_text(encoding="utf-8")) == {}
+    assert Paths.RUN_HISTORY_FILE.exists()
+    assert Paths.VISION_FILE.exists()
+    assert Paths.REQUIREMENTS_FILE.exists()
+    assert Paths.ARCHITECTURE_FILE.exists()
+    assert Paths.DECISIONS_FILE.exists()
+    assert Paths.MILESTONES_FILE.exists()
 
 def test_milestone_list(tmp_path):
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"

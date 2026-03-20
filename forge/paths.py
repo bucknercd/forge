@@ -38,3 +38,57 @@ class Paths:
         cls.DOCS_DIR.mkdir(parents=True, exist_ok=True)
         cls.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
         cls.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def required_directories(cls) -> list[Path]:
+        return [cls.DOCS_DIR, cls.SYSTEM_DIR, cls.ARTIFACTS_DIR]
+
+    @classmethod
+    def required_files(cls) -> list[Path]:
+        return [
+            cls.VISION_FILE,
+            cls.REQUIREMENTS_FILE,
+            cls.ARCHITECTURE_FILE,
+            cls.DECISIONS_FILE,
+            cls.MILESTONES_FILE,
+            cls.RUN_HISTORY_FILE,
+        ]
+
+    @classmethod
+    def initialize_project(cls) -> dict:
+        """
+        Initialize the current working directory as a Forge project.
+        Creates required directories/files if missing and never overwrites
+        existing files.
+        """
+        created_dirs: list[Path] = []
+        created_files: list[Path] = []
+
+        for directory in cls.required_directories():
+            if not directory.exists():
+                directory.mkdir(parents=True, exist_ok=True)
+                created_dirs.append(directory)
+
+        for file_path in cls.required_files():
+            if not file_path.exists():
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.touch()
+                created_files.append(file_path)
+
+        return {"created_dirs": created_dirs, "created_files": created_files}
+
+    @classmethod
+    def project_validation(cls) -> tuple[bool, list[Path]]:
+        """
+        Returns:
+          (is_valid, missing_paths)
+        A valid Forge project has all required directories and baseline files.
+        """
+        missing: list[Path] = []
+        for directory in cls.required_directories():
+            if not directory.exists():
+                missing.append(directory)
+        for file_path in cls.required_files():
+            if not file_path.exists():
+                missing.append(file_path)
+        return len(missing) == 0, missing

@@ -23,7 +23,6 @@ class Executor:
         - execute it via execute_milestone()
         - return a minimal structured outcome dict
         """
-        Paths.ensure_project_structure()
         milestone_service = MilestoneService()
         state_repository = MilestoneStateRepository(Paths.SYSTEM_DIR / "milestone_state.json")
         selector = MilestoneSelector(milestone_service, state_repository)
@@ -67,7 +66,6 @@ class Executor:
 
     @staticmethod
     def _execute_milestone_internal(milestone_id: int, llm_client: LLMClient | None):
-        Paths.ensure_project_structure()
         milestone = MilestoneService.get_milestone(milestone_id)
         if not milestone:
             print("Invalid milestone ID.")

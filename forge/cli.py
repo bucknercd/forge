@@ -27,25 +27,11 @@ class ForgeCLI:
     @staticmethod
     def init():
         """Bootstrap expected directories and files if missing."""
-        Paths.ensure_project_structure()
-        for file in [
-            Paths.VISION_FILE,
-            Paths.REQUIREMENTS_FILE,
-            Paths.ARCHITECTURE_FILE,
-            Paths.DECISIONS_FILE,
-            Paths.MILESTONES_FILE,
-        ]:
-            if not file.exists():
-                file.touch()
-                print(f"Created: {file}")
-        if not Paths.RUN_HISTORY_FILE.exists():
-            Paths.RUN_HISTORY_FILE.touch()
-            print(f"Created: {Paths.RUN_HISTORY_FILE}")
-
-        state_file = Paths.SYSTEM_DIR / "milestone_state.json"
-        if not state_file.exists():
-            state_file.write_text("{}", encoding="utf-8")
-            print(f"Created: {state_file}")
+        result = Paths.initialize_project()
+        for directory in result["created_dirs"]:
+            print(f"Created: {directory}")
+        for file_path in result["created_files"]:
+            print(f"Created: {file_path}")
         print("Forge repository initialized.")
 
     @staticmethod
@@ -285,7 +271,6 @@ class ForgeCLI:
 
 def main():
     Paths.refresh()
-    Paths.ensure_project_structure()
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -317,6 +302,17 @@ def main():
     subparsers.add_parser("execute-next", help="Execute the next eligible milestone")
 
     args = parser.parse_args()
+
+    if args.command != "init":
+        is_valid, missing = Paths.project_validation()
+        if not is_valid:
+            print("Current directory is not an initialized Forge project.")
+            print("Run `forge init` to bootstrap required directories/files.")
+            if missing:
+                print("Missing:")
+                for path in missing:
+                    print(f"- {path}")
+            return
 
     if args.command == "init":
         ForgeCLI.init()

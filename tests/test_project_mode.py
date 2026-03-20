@@ -35,23 +35,78 @@ def test_ensure_project_structure_creates_required_dirs(tmp_path):
     assert Paths.ARTIFACTS_DIR.exists()
 
 
-def test_cli_commands_operate_against_temp_project_dir(tmp_path, monkeypatch, capsys):
+def test_project_validation_false_for_non_forge_dir(tmp_path):
+    Paths.refresh(tmp_path)
+    is_valid, missing = Paths.project_validation()
+    assert is_valid is False
+    assert len(missing) > 0
+
+
+def test_project_validation_true_for_initialized_project(tmp_path):
+    Paths.refresh(tmp_path)
+    Paths.initialize_project()
+    is_valid, missing = Paths.project_validation()
+    assert is_valid is True
+    assert missing == []
+
+
+def test_init_creates_required_directories_and_files(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    main()
+    _ = capsys.readouterr().out
+
+    assert (tmp_path / "docs").exists()
+    assert (tmp_path / ".system").exists()
+    assert (tmp_path / "artifacts").exists()
+    assert (tmp_path / "docs" / "vision.txt").exists()
+    assert (tmp_path / "docs" / "requirements.md").exists()
+    assert (tmp_path / "docs" / "architecture.md").exists()
+    assert (tmp_path / "docs" / "decisions.md").exists()
+    assert (tmp_path / "docs" / "milestones.md").exists()
+    assert (tmp_path / ".system" / "run_history.log").exists()
+
+
+def test_init_is_idempotent_and_does_not_overwrite_files(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    main()
+    _ = capsys.readouterr().out
+
+    vision_file = tmp_path / "docs" / "vision.txt"
+    vision_file.write_text("custom vision", encoding="utf-8")
+
+    # Run init again; file content should remain unchanged.
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    main()
+    _ = capsys.readouterr().out
+    assert vision_file.read_text(encoding="utf-8") == "custom vision"
+
+
+def test_non_init_command_fails_before_init(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "status"])
+    main()
+    out = capsys.readouterr().out
+    assert "not an initialized Forge project" in out
+    assert "forge init" in out
+
+
+def test_cli_commands_operate_after_init(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
 
-    # status should run against cwd and auto-create required dirs
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    main()
+    _ = capsys.readouterr().out
+
     monkeypatch.setattr("sys.argv", ["forge", "status"])
     main()
     status_out = capsys.readouterr().out
     assert "Repository Status:" in status_out
-    assert (tmp_path / "docs").exists()
-    assert (tmp_path / ".system").exists()
-    assert (tmp_path / "artifacts").exists()
 
-    # prepare milestones in target project directory
     milestones_file = tmp_path / "docs" / "milestones.md"
     _write_minimal_milestones(milestones_file)
 
-    # sync state then run milestone-next
     monkeypatch.setattr("sys.argv", ["forge", "milestone-sync-state"])
     main()
     _ = capsys.readouterr().out
@@ -61,7 +116,6 @@ def test_cli_commands_operate_against_temp_project_dir(tmp_path, monkeypatch, ca
     next_out = capsys.readouterr().out
     assert "Next milestone: 1." in next_out
 
-    # execute-next should execute within the temp project directory
     monkeypatch.setattr("sys.argv", ["forge", "execute-next"])
     main()
     exec_out = capsys.readouterr().out
