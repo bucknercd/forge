@@ -9,6 +9,9 @@ from forge.milestone_state import normalize_milestone_state_value
 from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
 
+from forge.llm import LLMClient, StubLLMClient
+from forge.prompt_builder import build_execution_prompt, build_retry_prompt
+
 MAX_RETRIES = 2
 
 class Executor:
@@ -58,7 +61,11 @@ class Executor:
         }
 
     @staticmethod
-    def execute_milestone(milestone_id: int):
+    def execute_milestone(milestone_id: int, llm_client: LLMClient | None = None):
+        return Executor._execute_milestone_internal(milestone_id, llm_client=llm_client)
+
+    @staticmethod
+    def _execute_milestone_internal(milestone_id: int, llm_client: LLMClient | None):
         milestone = MilestoneService.get_milestone(milestone_id)
         if not milestone:
             print("Invalid milestone ID.")
@@ -122,12 +129,41 @@ class Executor:
         result_dir = Paths.SYSTEM_DIR / "results"
         result_dir.mkdir(parents=True, exist_ok=True)
         result_file = result_dir / f"milestone_{milestone_id}.json"
+
+        llm_client = llm_client or StubLLMClient()
+
+        attempt_number = milestone_state["attempts"]
+
+        previous_validation_error = ""
+        if attempt_number > 1 and result_file.exists():
+            try:
+                with result_file.open("r", encoding="utf-8") as file:
+                    previous = json.load(file)
+                previous_validation_error = previous.get("validation_error", "") or ""
+            except Exception:
+                previous_validation_error = ""
+
+        if attempt_number <= 1 or not previous_validation_error:
+            prompt = build_execution_prompt(milestone, attempt_number)
+        else:
+            prompt = build_retry_prompt(milestone, attempt_number, previous_validation_error)
+
+        llm_output = llm_client.generate(prompt)
+
+        result_payload = {"id": milestone_id, "title": milestone.title}
+        if isinstance(llm_output, str) and llm_output.strip():
+            try:
+                parsed = json.loads(llm_output)
+                if isinstance(parsed, dict) and parsed.get("summary") is not None:
+                    result_payload["summary"] = parsed.get("summary")
+                    result_payload["llm_output"] = llm_output
+                else:
+                    result_payload["raw_output"] = llm_output
+            except Exception:
+                result_payload["raw_output"] = llm_output
+
         with result_file.open("w", encoding="utf-8") as file:
-            json.dump({
-                "id": milestone_id,
-                "title": milestone.title,
-                "summary": "Execution completed successfully."
-            }, file, indent=4)
+            json.dump(result_payload, file, indent=4)
 
         # Create the plan file
         plan_dir = Paths.SYSTEM_DIR / "plans"
@@ -140,7 +176,8 @@ class Executor:
             file.write(f"## Validation\n{milestone.validation}\n")
 
         # Perform validation step
-        if Validator.validate_milestone(milestone_id):
+        is_valid, reason = Validator.validate_milestone_with_report(milestone_id)
+        if is_valid:
             # Log completion
             entry = RunHistoryEntry(
                 task=f"Execute milestone {milestone_id} (Attempt {milestone_state['attempts']})",
@@ -157,6 +194,16 @@ class Executor:
                 milestone_state["status"] = "retry_pending"
             else:
                 milestone_state["status"] = "failed"
+
+            # Store validation error for prompt retry context.
+            try:
+                with result_file.open("r", encoding="utf-8") as file:
+                    updated_payload = json.load(file)
+            except Exception:
+                updated_payload = {}
+            updated_payload["validation_error"] = reason
+            with result_file.open("w", encoding="utf-8") as file:
+                json.dump(updated_payload, file, indent=4)
 
             # Log failure
             entry = RunHistoryEntry(

@@ -174,48 +174,48 @@ Forge supports a high-level execution loop via `execute-next`.
 This enables iterative, state-aware project progression.
 
 
-### Next TODO
-## LLM-Backed Execution
+## Next TODO
+## Standalone CLI Project Mode
 
-Forge should integrate an LLM into the execution loop to enable iterative implementation.
+Forge should operate as a standalone CLI tool that can run against any project directory.
 
 ### Goal
-Enhance milestone execution so that:
-- an LLM generates implementation output
-- validation (tests) provides feedback
-- failures are used to drive retries
+Make Forge usable across future GitHub projects without copying Forge source code into each repository.
 
 ### Deliverables
-- Add an `LLMClient` abstraction:
-  - simple interface: `generate(prompt: str) -> str`
-- Implement prompt construction:
-  - milestone objective
-  - scope
-  - validation criteria
-  - relevant context (minimal)
-- Integrate LLM into execution flow:
-  - replace placeholder result generation with LLM output
-- Capture validation failures:
-  - extract test errors
-  - include them in retry prompts
-- Update retry loop:
-  - use failure feedback to improve subsequent attempts
+- Ensure Forge resolves project paths from the current working directory
+- Add automatic project structure initialization for required directories:
+  - `docs/`
+  - `.system/`
+  - `artifacts/`
+- Confirm or refactor path handling so Forge does not depend on its own source repo layout
+- Add/install a real CLI entry point such as:
+  - `forge status`
+  - `forge milestone-next`
+  - `forge execute-next`
+- Ensure commands work when run from a separate target project directory
 
 ### Rules
-- LLM is a proposal generator only
-- validation remains the source of truth
-- do not allow LLM to modify runtime state directly
-- keep prompts minimal and focused
+- Forge source code should live in its own repo/package
+- Target projects should only need Forge-managed folders/files, not embedded Forge source code
+- Use `Path.cwd()` or equivalent as the project root
+- Keep CLI thin and keep path logic centralized
 
 ### Tests
-- mock LLM responses for deterministic testing
-- test retry flow with simulated failures
-- ensure execution loop remains stable without real LLM calls
+Unit tests:
+- path resolution uses project working directory
+- ensure-structure creates required directories if missing
+
+Integration tests:
+- run Forge services against a temporary project directory
+- verify required folders are created automatically
+- verify status / milestone-next / execute-next operate against that temp project
 
 ### Constraints
+- Python standard library only
 - no frameworks
-- minimal abstraction
-- keep system deterministic and testable
+- minimal clean changes
+- no large packaging rewrite unless necessary
 
 ### Design intent
-This step transforms Forge from a milestone executor into an iterative design + implementation engine driven by validation feedback.
+This step makes Forge a reusable tool for future repositories instead of a one-off implementation inside its own codebase.

@@ -38,9 +38,16 @@ class ForgeCLI:
             if not file.exists():
                 file.touch()
                 print(f"Created: {file}")
+        # Ensure runtime directory exists before touching files under it.
+        Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
         if not Paths.RUN_HISTORY_FILE.exists():
             Paths.RUN_HISTORY_FILE.touch()
             print(f"Created: {Paths.RUN_HISTORY_FILE}")
+
+        state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+        if not state_file.exists():
+            state_file.write_text("{}", encoding="utf-8")
+            print(f"Created: {state_file}")
         print("Forge repository initialized.")
 
     @staticmethod
