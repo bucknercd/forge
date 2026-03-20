@@ -19,6 +19,7 @@ def test_execute_milestone_success(tmp_path):
     # Setup system directory
     Paths.SYSTEM_DIR = tmp_path / ".system"
     Paths.SYSTEM_DIR.mkdir()
+    Paths.RUN_HISTORY_FILE = Paths.SYSTEM_DIR / "run_history.log"
     Paths.DOCS_DIR = tmp_path / "docs"
     Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
     Paths.DECISIONS_FILE = Paths.DOCS_DIR / "decisions.md"
@@ -52,6 +53,13 @@ def test_execute_milestone_success(tmp_path):
     assert "Milestone 1 completed" in decisions_content
     assert "Execution outcome: completed" in decisions_content
 
+    # Validate structured run attempt entry
+    history_lines = Paths.RUN_HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+    structured_entries = [json.loads(line) for line in history_lines if "milestone_id" in json.loads(line)]
+    assert structured_entries
+    assert structured_entries[-1]["milestone_id"] == 1
+    assert structured_entries[-1]["status"] == "success"
+
 def test_execute_milestone_failure(tmp_path):
     # Setup milestone file with missing scope/validation (objective present)
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"
@@ -67,6 +75,7 @@ def test_execute_milestone_failure(tmp_path):
     # Setup system directory
     Paths.SYSTEM_DIR = tmp_path / ".system"
     Paths.SYSTEM_DIR.mkdir()
+    Paths.RUN_HISTORY_FILE = Paths.SYSTEM_DIR / "run_history.log"
     Paths.DOCS_DIR = tmp_path / "docs"
     Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
     Paths.DECISIONS_FILE = Paths.DOCS_DIR / "decisions.md"
@@ -89,3 +98,10 @@ def test_execute_milestone_failure(tmp_path):
     # Failed execution should not append misleading success decision.
     decisions_content = Paths.DECISIONS_FILE.read_text(encoding="utf-8")
     assert "Milestone 1 completed" not in decisions_content
+
+    history_lines = Paths.RUN_HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+    structured_entries = [json.loads(line) for line in history_lines if "milestone_id" in json.loads(line)]
+    assert structured_entries
+    assert structured_entries[-1]["milestone_id"] == 1
+    assert structured_entries[-1]["status"] == "failure"
+    assert "error_message" in structured_entries[-1]

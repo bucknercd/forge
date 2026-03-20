@@ -207,6 +207,12 @@ class Executor:
                 milestone_title=milestone.title,
                 summary=str(result_payload.get("summary", "Execution completed successfully.")),
             )
+
+            RunHistory.log_milestone_attempt(
+                milestone_id=milestone_id,
+                milestone_title=milestone.title,
+                status="success",
+            )
         else:
             if milestone_state["attempts"] < MAX_RETRIES:
                 milestone_state["status"] = "retry_pending"
@@ -231,6 +237,13 @@ class Executor:
                 timestamp=datetime.now()
             )
             RunHistory.log_run(entry)
+
+            RunHistory.log_milestone_attempt(
+                milestone_id=milestone_id,
+                milestone_title=milestone.title,
+                status="failure",
+                error_message=reason,
+            )
 
         # Persist updated state
         state[str(milestone_id)] = milestone_state

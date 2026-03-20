@@ -59,3 +59,68 @@ def test_get_recent_entries(tmp_path):
     finally:
         # Restore the original path
         Paths.RUN_HISTORY_FILE = original_path
+
+
+def test_log_milestone_attempt_success_format(tmp_path):
+    run_history_file = tmp_path / "run_history.log"
+    original_path = Paths.RUN_HISTORY_FILE
+    original_system_dir = Paths.SYSTEM_DIR
+    Paths.SYSTEM_DIR = tmp_path
+    Paths.RUN_HISTORY_FILE = run_history_file
+    try:
+        RunHistory.log_milestone_attempt(
+            milestone_id=1,
+            milestone_title="Milestone 1: First",
+            status="success",
+        )
+        entry = json.loads(run_history_file.read_text(encoding="utf-8").strip())
+        assert entry["milestone_id"] == 1
+        assert entry["milestone_title"] == "Milestone 1: First"
+        assert entry["status"] == "success"
+        assert "ts" in entry
+        assert "error_message" not in entry
+    finally:
+        Paths.RUN_HISTORY_FILE = original_path
+        Paths.SYSTEM_DIR = original_system_dir
+
+
+def test_log_milestone_attempt_failure_format(tmp_path):
+    run_history_file = tmp_path / "run_history.log"
+    original_path = Paths.RUN_HISTORY_FILE
+    original_system_dir = Paths.SYSTEM_DIR
+    Paths.SYSTEM_DIR = tmp_path
+    Paths.RUN_HISTORY_FILE = run_history_file
+    try:
+        RunHistory.log_milestone_attempt(
+            milestone_id=2,
+            milestone_title="Milestone 2: Second",
+            status="failure",
+            error_message="Validation failed",
+        )
+        entry = json.loads(run_history_file.read_text(encoding="utf-8").strip())
+        assert entry["milestone_id"] == 2
+        assert entry["status"] == "failure"
+        assert entry["error_message"] == "Validation failed"
+    finally:
+        Paths.RUN_HISTORY_FILE = original_path
+        Paths.SYSTEM_DIR = original_system_dir
+
+
+def test_log_milestone_attempt_repeated_appends(tmp_path):
+    run_history_file = tmp_path / "run_history.log"
+    original_path = Paths.RUN_HISTORY_FILE
+    original_system_dir = Paths.SYSTEM_DIR
+    Paths.SYSTEM_DIR = tmp_path
+    Paths.RUN_HISTORY_FILE = run_history_file
+    try:
+        RunHistory.log_milestone_attempt(1, "M1", "success")
+        RunHistory.log_milestone_attempt(1, "M1", "failure", error_message="err")
+        lines = run_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        e1 = json.loads(lines[0])
+        e2 = json.loads(lines[1])
+        assert e1["status"] == "success"
+        assert e2["status"] == "failure"
+    finally:
+        Paths.RUN_HISTORY_FILE = original_path
+        Paths.SYSTEM_DIR = original_system_dir

@@ -245,3 +245,21 @@ def test_repeated_successful_executions_append_decisions(tmp_path):
     Executor.execute_next()  # milestone 2 success
     second_content = Paths.DECISIONS_FILE.read_text(encoding="utf-8")
     assert second_content.count("Execution outcome: completed") == 2
+
+
+def test_repeated_execute_next_appends_structured_run_history(tmp_path):
+    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
+    _write_two_simple_milestones(Paths.MILESTONES_FILE)
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+    Paths.SYSTEM_DIR.mkdir()
+    Paths.RUN_HISTORY_FILE = Paths.SYSTEM_DIR / "run_history.log"
+
+    ForgeCLI.milestone_sync_state()
+    Executor.execute_next()
+    Executor.execute_next()
+
+    lines = Paths.RUN_HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+    entries = [json.loads(line) for line in lines if "milestone_id" in json.loads(line)]
+    assert len(entries) >= 2
+    assert entries[-2]["status"] == "success"
+    assert entries[-1]["status"] == "success"
