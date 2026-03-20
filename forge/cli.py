@@ -100,7 +100,16 @@ class ForgeCLI:
         state = ForgeCLI.load_milestone_state()
         print("- Milestone States:")
         for milestone_id, milestone_state in state.items():
-            print(f"  Milestone {milestone_id}: {milestone_state}")
+            if isinstance(milestone_state, str):
+                status = milestone_state
+                attempts = 0
+            elif isinstance(milestone_state, dict):
+                status = milestone_state.get("status", "not_started")
+                attempts = milestone_state.get("attempts", 0)
+            else:
+                status = "not_started"
+                attempts = 0
+            print(f"  Milestone {milestone_id}: status={status}, attempts={attempts}")
 
     @staticmethod
     def design_show():
@@ -231,12 +240,17 @@ class ForgeCLI:
     def milestone_sync_state():
         """Reconcile milestone_state.json against parsed milestones."""
         result = sync_milestone_state()
-        print("Milestone state synchronized.")
-        print(f"Initialized: {result['initialized']}")
-        print(f"Added entries: {len(result['added'])}")
-        print(f"Removed entries: {len(result['removed'])}")
         if result["unchanged"]:
-            print("State already synchronized.")
+            print("Milestone state is already synchronized.")
+            return
+
+        print("Milestone state synchronized.")
+        if result["initialized"]:
+            print("Initialized state file.")
+        if result["added"]:
+            print(f"Added entries: {len(result['added'])}")
+        if result["removed"]:
+            print(f"Removed entries: {len(result['removed'])}")
 
 def main():
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")

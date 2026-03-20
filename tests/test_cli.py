@@ -234,13 +234,40 @@ def test_milestone_sync_state_cli_output(tmp_path, capsys):
     ForgeCLI.milestone_sync_state()
     first_out = capsys.readouterr().out
     assert "Milestone state synchronized." in first_out
-    assert "Initialized: True" in first_out
+    assert "Initialized state file." in first_out
     assert "Added entries: 2" in first_out
-    assert "Removed entries: 0" in first_out
+    assert "Removed entries" not in first_out
 
     ForgeCLI.milestone_sync_state()
     second_out = capsys.readouterr().out
-    assert "Initialized: False" in second_out
-    assert "Added entries: 0" in second_out
-    assert "Removed entries: 0" in second_out
-    assert "State already synchronized." in second_out
+    assert second_out.strip() == "Milestone state is already synchronized."
+
+
+def test_status_formats_milestone_states_consistently(tmp_path, capsys):
+    Paths.DOCS_DIR = tmp_path / "docs"
+    Paths.DOCS_DIR.mkdir()
+    Paths.VISION_FILE = Paths.DOCS_DIR / "vision.md"
+    Paths.REQUIREMENTS_FILE = Paths.DOCS_DIR / "requirements.md"
+    Paths.ARCHITECTURE_FILE = Paths.DOCS_DIR / "architecture.md"
+    Paths.DECISIONS_FILE = Paths.DOCS_DIR / "decisions.md"
+    Paths.MILESTONES_FILE = Paths.DOCS_DIR / "milestones.md"
+    Paths.RUN_HISTORY_FILE = tmp_path / "run_history.log"
+    Paths.SYSTEM_DIR = tmp_path / ".system"
+    Paths.SYSTEM_DIR.mkdir()
+
+    Paths.MILESTONES_FILE.write_text("## Milestone 1\nDetails")
+    state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "1": "in_progress",
+                "2": {"status": "not_started", "attempts": 0},
+            },
+            indent=4,
+        )
+    )
+
+    ForgeCLI.status()
+    out = capsys.readouterr().out
+    assert "Milestone 1: status=in_progress, attempts=0" in out
+    assert "Milestone 2: status=not_started, attempts=0" in out
