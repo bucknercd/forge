@@ -65,6 +65,11 @@ def test_init_creates_required_directories_and_files(tmp_path, monkeypatch, caps
     assert (tmp_path / "docs" / "decisions.md").exists()
     assert (tmp_path / "docs" / "milestones.md").exists()
     assert (tmp_path / ".system" / "run_history.log").exists()
+    assert "Project Vision" in (tmp_path / "docs" / "vision.txt").read_text(encoding="utf-8")
+    assert "# Requirements" in (tmp_path / "docs" / "requirements.md").read_text(encoding="utf-8")
+    assert "# Architecture" in (tmp_path / "docs" / "architecture.md").read_text(encoding="utf-8")
+    assert "# Decisions" in (tmp_path / "docs" / "decisions.md").read_text(encoding="utf-8")
+    assert "# Milestones" in (tmp_path / "docs" / "milestones.md").read_text(encoding="utf-8")
 
 
 def test_init_is_idempotent_and_does_not_overwrite_files(tmp_path, monkeypatch, capsys):
@@ -81,6 +86,25 @@ def test_init_is_idempotent_and_does_not_overwrite_files(tmp_path, monkeypatch, 
     main()
     _ = capsys.readouterr().out
     assert vision_file.read_text(encoding="utf-8") == "custom vision"
+
+
+def test_initialize_project_writes_templates_only_for_missing_files(tmp_path):
+    Paths.refresh(tmp_path)
+    Paths.ensure_project_structure()
+
+    # Pre-create one file with custom content to verify no overwrite.
+    Paths.VISION_FILE.write_text("my vision", encoding="utf-8")
+    result = Paths.initialize_project()
+
+    assert Paths.VISION_FILE.read_text(encoding="utf-8") == "my vision"
+    assert Paths.REQUIREMENTS_FILE.exists()
+    assert Paths.ARCHITECTURE_FILE.exists()
+    assert Paths.DECISIONS_FILE.exists()
+    assert Paths.MILESTONES_FILE.exists()
+    assert Paths.RUN_HISTORY_FILE.exists()
+    assert "# Requirements" in Paths.REQUIREMENTS_FILE.read_text(encoding="utf-8")
+    # Existing file should not be marked as newly created
+    assert Paths.VISION_FILE not in result["created_files"]
 
 
 def test_non_init_command_fails_before_init(tmp_path, monkeypatch, capsys):

@@ -1,6 +1,7 @@
 # forge/paths.py
 
 from pathlib import Path
+from forge.project_templates import starter_templates
 
 class Paths:
     BASE_DIR = Path.cwd()
@@ -63,6 +64,7 @@ class Paths:
         """
         created_dirs: list[Path] = []
         created_files: list[Path] = []
+        templates = starter_templates()
 
         for directory in cls.required_directories():
             if not directory.exists():
@@ -72,7 +74,11 @@ class Paths:
         for file_path in cls.required_files():
             if not file_path.exists():
                 file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.touch()
+                template = templates.get(file_path.name)
+                if template is not None:
+                    file_path.write_text(template, encoding="utf-8")
+                else:
+                    file_path.touch()
                 created_files.append(file_path)
 
         return {"created_dirs": created_dirs, "created_files": created_files}

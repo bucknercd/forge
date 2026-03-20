@@ -39,6 +39,11 @@ def test_init_creates_system_dir_and_baseline_files(tmp_path, capsys):
     assert Paths.ARCHITECTURE_FILE.exists()
     assert Paths.DECISIONS_FILE.exists()
     assert Paths.MILESTONES_FILE.exists()
+    assert "Project Vision" in Paths.VISION_FILE.read_text(encoding="utf-8")
+    assert "# Requirements" in Paths.REQUIREMENTS_FILE.read_text(encoding="utf-8")
+    assert "# Architecture" in Paths.ARCHITECTURE_FILE.read_text(encoding="utf-8")
+    assert "# Decisions" in Paths.DECISIONS_FILE.read_text(encoding="utf-8")
+    assert "# Milestones" in Paths.MILESTONES_FILE.read_text(encoding="utf-8")
 
 def test_milestone_list(tmp_path):
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"

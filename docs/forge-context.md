@@ -175,71 +175,47 @@ This enables iterative, state-aware project progression.
 
 
 ## Next TODO
-## Explicit Project Bootstrap and Safe Command Behavior
+## Starter Templates for New Forge Projects
 
-Forge should support explicit project initialization and safer command behavior when run in directories that are not yet valid Forge projects.
+Forge should initialize new projects with useful starter content instead of empty placeholder files.
 
 ### Goal
-Make Forge behave like a real CLI tool by adding a dedicated `forge init` command, project validation, and predictable handling for missing Forge files.
+Make `forge init` produce a usable starting workspace by writing minimal default content into Forge-managed docs when those files do not already exist.
 
 ### Deliverables
-- Add a real `forge init` command
-- `forge init` should create required directories:
-  - `docs/`
-  - `.system/`
-  - `artifacts/`
-- `forge init` should create required baseline files if missing:
+- Add default template content for:
   - `docs/vision.txt`
   - `docs/requirements.md`
   - `docs/architecture.md`
   - `docs/decisions.md`
   - `docs/milestones.md`
-  - `.system/run_history.log`
-- Add centralized project validation logic
-- Add a way to determine whether the current directory is a valid Forge project
-- Refactor command behavior so non-init commands do not silently create a full project unless that is intentionally desired
-- Ensure commands fail clearly and helpfully when required project files are missing
-- Show actionable guidance such as suggesting `forge init`
+- Only write template content when files do not already exist
+- Keep templates minimal, readable, and generic
+- Centralize template generation logic
+- Preserve idempotent `forge init` behavior
 
 ### Rules
+- Do not overwrite existing user content
 - Keep CLI thin
-- Keep project validation and initialization logic centralized
-- Do not duplicate path or bootstrap logic across commands
-- Preserve minimal standard-library-only design
-- Prefer explicit initialization over surprising side effects
-
-### Command behavior expectations
-- `forge init`
-  - initializes the current working directory as a Forge project
-  - creates missing directories and baseline files
-  - does not overwrite existing files
-- `forge status`
-  - should work safely in initialized projects
-  - should show a clear message if run outside a Forge project
-- `forge milestone-next`
-  - should fail clearly if project files are missing or project is not initialized
-- `forge execute-next`
-  - should fail clearly if project files are missing or project is not initialized
+- Keep template logic outside CLI
+- Use Python standard library only
+- Keep templates short and practical, not verbose
 
 ### Tests
 Unit tests:
-- project validation returns true for a valid initialized project
-- project validation returns false for a non-Forge directory
-- init creates all required directories
-- init creates all required files without overwriting existing content
+- template writer creates expected default content for missing files
+- existing files are not overwritten
+- init remains idempotent
 
 Integration tests:
-- run `forge init` inside a temporary directory
-- verify all required directories/files are created
-- verify `status` works after init
-- verify non-init commands produce clear errors before init
-- verify repeated `forge init` is safe and idempotent
+- run `forge init` in a temp directory
+- verify initialized files contain useful starter content
+- verify rerunning `forge init` preserves edited files
 
 ### Constraints
 - Python standard library only
-- no frameworks
 - minimal clean changes
-- no large architectural rewrite unless necessary
+- no large architectural rewrite
 
 ### Design intent
-This step makes Forge safer and more predictable by separating project bootstrap from normal command execution.
+This step makes Forge immediately useful after initialization by giving users structured starter documents instead of empty files.
