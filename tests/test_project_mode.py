@@ -112,8 +112,9 @@ def test_non_init_command_fails_before_init(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["forge", "status"])
     main()
     out = capsys.readouterr().out
-    assert "not an initialized Forge project" in out
-    assert "forge init" in out
+    assert "Repository Status:" in out
+    assert "Project State: not_initialized" in out
+    assert "Hint: run `forge init`" in out
 
 
 def test_cli_commands_operate_after_init(tmp_path, monkeypatch, capsys):
@@ -127,6 +128,7 @@ def test_cli_commands_operate_after_init(tmp_path, monkeypatch, capsys):
     main()
     status_out = capsys.readouterr().out
     assert "Repository Status:" in status_out
+    assert "Project State: initialized_incomplete" in status_out
 
     milestones_file = tmp_path / "docs" / "milestones.md"
     _write_minimal_milestones(milestones_file)
@@ -148,3 +150,24 @@ def test_cli_commands_operate_after_init(tmp_path, monkeypatch, capsys):
     state_file = tmp_path / ".system" / "milestone_state.json"
     state = json.loads(state_file.read_text())
     assert state["1"]["status"] == "completed"
+
+
+def test_status_reports_ready_after_content_filled(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    main()
+    _ = capsys.readouterr().out
+
+    (tmp_path / "docs" / "vision.txt").write_text("Custom vision", encoding="utf-8")
+    (tmp_path / "docs" / "requirements.md").write_text("# Requirements\n- custom", encoding="utf-8")
+    (tmp_path / "docs" / "architecture.md").write_text("# Architecture\ncustom", encoding="utf-8")
+    (tmp_path / "docs" / "decisions.md").write_text("# Decisions\ncustom", encoding="utf-8")
+    (tmp_path / "docs" / "milestones.md").write_text(
+        "# Milestones\n\n## Milestone 1: Ready\n- **Objective**: O\n- **Scope**: S\n- **Validation**: V\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("sys.argv", ["forge", "status"])
+    main()
+    out = capsys.readouterr().out
+    assert "Project State: ready" in out

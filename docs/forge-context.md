@@ -175,47 +175,54 @@ This enables iterative, state-aware project progression.
 
 
 ## Next TODO
-## Starter Templates for New Forge Projects
+## Project Status Validation and Missing-Content Reporting
 
-Forge should initialize new projects with useful starter content instead of empty placeholder files.
+Forge should provide clearer project health feedback by validating required files and reporting missing or incomplete content in a structured way.
 
 ### Goal
-Make `forge init` produce a usable starting workspace by writing minimal default content into Forge-managed docs when those files do not already exist.
+Make `forge status` more useful by showing whether a Forge project is merely initialized or actually ready for use, based on required files and meaningful content.
 
 ### Deliverables
-- Add default template content for:
-  - `docs/vision.txt`
-  - `docs/requirements.md`
-  - `docs/architecture.md`
-  - `docs/decisions.md`
-  - `docs/milestones.md`
-- Only write template content when files do not already exist
-- Keep templates minimal, readable, and generic
-- Centralize template generation logic
-- Preserve idempotent `forge init` behavior
+- Add centralized project status validation logic
+- Distinguish between:
+  - project not initialized
+  - project initialized but incomplete
+  - project initialized and minimally ready
+- Detect missing required files
+- Detect empty or placeholder-only content in key docs
+- Refactor `forge status` to report structured readiness information
+- Keep validation/reporting logic centralized and reusable
 
 ### Rules
-- Do not overwrite existing user content
 - Keep CLI thin
-- Keep template logic outside CLI
+- Do not duplicate validation logic across commands
 - Use Python standard library only
-- Keep templates short and practical, not verbose
+- Prefer simple readable checks over complex scoring
+- Keep output practical and easy to understand
+
+### Suggested readiness checks
+- `docs/vision.txt` exists and is not empty
+- `docs/requirements.md` exists and is not empty
+- `docs/architecture.md` exists and is not empty
+- `docs/milestones.md` exists and contains at least one milestone heading or recognizable milestone entry
+- `docs/decisions.md` may exist even if currently empty, but should still be reported clearly
 
 ### Tests
 Unit tests:
-- template writer creates expected default content for missing files
-- existing files are not overwritten
-- init remains idempotent
+- validation reports missing files correctly
+- validation reports empty/template-only files correctly
+- validation distinguishes initialized vs minimally ready project
 
 Integration tests:
-- run `forge init` in a temp directory
-- verify initialized files contain useful starter content
-- verify rerunning `forge init` preserves edited files
+- run `forge status` in a temp initialized project with only template content
+- verify output marks project as incomplete
+- fill in minimal content and verify output marks project as ready
+- verify missing-file scenarios are reported clearly
 
 ### Constraints
 - Python standard library only
 - minimal clean changes
-- no large architectural rewrite
+- no large rewrite
 
 ### Design intent
-This step makes Forge immediately useful after initialization by giving users structured starter documents instead of empty files.
+This step makes Forge status meaningful by turning it into a project-health report instead of only a filesystem check.

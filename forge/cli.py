@@ -15,6 +15,7 @@ from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
 from forge.milestone_sync import sync_milestone_state
 from forge.milestone_state import normalize_milestone_state_value
+from forge.project_status import analyze_project_status
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -72,40 +73,47 @@ class ForgeCLI:
     @staticmethod
     def status():
         """Show current repository state."""
+        report = analyze_project_status()
         print("Repository Status:")
-        for file in [
-            ("Vision", Paths.VISION_FILE),
-            ("Requirements", Paths.REQUIREMENTS_FILE),
-            ("Architecture", Paths.ARCHITECTURE_FILE),
-            ("Decisions", Paths.DECISIONS_FILE),
-            ("Milestones", Paths.MILESTONES_FILE),
-        ]:
-            exists = "Exists" if file[1].exists() else "Missing"
-            print(f"- {file[0]}: {exists}")
-        if Paths.MILESTONES_FILE.exists():
-            milestones = DesignManager.load_document(Paths.MILESTONES_FILE).split("\n## ")
-            print(f"- Milestones: {len(milestones) - 1} found")
-        if Paths.RUN_HISTORY_FILE.exists():
-            history = RunHistory.get_recent_entries(1)
-            if history:
-                print(f"- Latest Run: {history[0]}")
-            else:
-                print("- Latest Run: No entries found")
+        print(f"- Project State: {report['state']}")
 
-        # Include milestone state summary
+        if report["missing_paths"]:
+            print("- Missing required paths:")
+            for path in report["missing_paths"]:
+                print(f"  - {path}")
+            print("- Hint: run `forge init`")
+
+        if report["empty_files"]:
+            print("- Empty files:")
+            for path in report["empty_files"]:
+                print(f"  - {path}")
+
+        if report["template_only_files"]:
+            print("- Template-only files (needs customization):")
+            for path in report["template_only_files"]:
+                print(f"  - {path}")
+
+        if report["milestones_issue"]:
+            print("- Milestones file has no recognized milestone headings (## Milestone ...).")
+
+        if report["state"] == "ready":
+            print("- Project is minimally ready for Forge workflows.")
+
+        # Include runtime milestone state summary when available
         state = ForgeCLI.load_milestone_state()
-        print("- Milestone States:")
-        for milestone_id, milestone_state in state.items():
-            if isinstance(milestone_state, str):
-                status = milestone_state
-                attempts = 0
-            elif isinstance(milestone_state, dict):
-                status = milestone_state.get("status", "not_started")
-                attempts = milestone_state.get("attempts", 0)
-            else:
-                status = "not_started"
-                attempts = 0
-            print(f"  Milestone {milestone_id}: status={status}, attempts={attempts}")
+        if state:
+            print("- Milestone States:")
+            for milestone_id, milestone_state in state.items():
+                if isinstance(milestone_state, str):
+                    status = milestone_state
+                    attempts = 0
+                elif isinstance(milestone_state, dict):
+                    status = milestone_state.get("status", "not_started")
+                    attempts = milestone_state.get("attempts", 0)
+                else:
+                    status = "not_started"
+                    attempts = 0
+                print(f"  Milestone {milestone_id}: status={status}, attempts={attempts}")
 
     @staticmethod
     def design_show():
@@ -303,7 +311,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command != "init":
+    if args.command not in {"init", "status"}:
         is_valid, missing = Paths.project_validation()
         if not is_valid:
             print("Current directory is not an initialized Forge project.")
