@@ -41,6 +41,16 @@ class Milestone:
         )
 
 class MilestoneService:
+    MILESTONE_HEADING_RE = re.compile(r"^##\s+Milestone\s+(\d+)\s*:\s+(.+)$")
+
+    @staticmethod
+    def _validate_milestones(milestones: List[Milestone]) -> None:
+        for milestone in milestones:
+            if not milestone.objective.strip():
+                raise ValueError(
+                    f"Milestone {milestone.id} is missing required objective field."
+                )
+
     @staticmethod
     def parse_milestones(content: str) -> List[Milestone]:
         milestones = []
@@ -50,6 +60,12 @@ class MilestoneService:
             line = line.strip()
 
             if line.startswith("## Milestone"):
+                match = MilestoneService.MILESTONE_HEADING_RE.match(line)
+                if not match:
+                    raise ValueError(
+                        f"Malformed milestone heading: '{line}'. "
+                        "Expected format: '## Milestone <number>: <title>'."
+                    )
                 if current_milestone:
                     milestones.append(current_milestone)
                 title = line[3:].strip()
@@ -76,6 +92,7 @@ class MilestoneService:
         if current_milestone:
             milestones.append(current_milestone)
 
+        MilestoneService._validate_milestones(milestones)
         return milestones
 
     @staticmethod

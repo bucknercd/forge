@@ -32,7 +32,7 @@ def _write_failed_prereq_milestones(path):
 # Milestones
 
 ## Milestone 1: Prerequisite (Will Fail)
-- **Objective**:
+- **Objective**: Prerequisite exists
 - **Scope**:
 - **Validation**:
 

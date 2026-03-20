@@ -175,54 +175,61 @@ This enables iterative, state-aware project progression.
 
 
 ## Next TODO
-## Project Status Validation and Missing-Content Reporting
+## Milestone Structure Validation and Parsing Hardening
 
-Forge should provide clearer project health feedback by validating required files and reporting missing or incomplete content in a structured way.
+Forge should validate milestone structure more explicitly so milestone-driven commands operate on predictable, well-formed milestone definitions.
 
 ### Goal
-Make `forge status` more useful by showing whether a Forge project is merely initialized or actually ready for use, based on required files and meaningful content.
+Make milestone parsing and execution safer by enforcing a minimal milestone structure and reporting malformed milestone definitions clearly.
 
 ### Deliverables
-- Add centralized project status validation logic
-- Distinguish between:
-  - project not initialized
-  - project initialized but incomplete
-  - project initialized and minimally ready
-- Detect missing required files
-- Detect empty or placeholder-only content in key docs
-- Refactor `forge status` to report structured readiness information
-- Keep validation/reporting logic centralized and reusable
+- Add centralized milestone validation logic
+- Define a minimal valid milestone structure
+- Detect malformed or incomplete milestone blocks in `docs/milestones.md`
+- Refactor milestone parsing flow so `milestone-next` and `execute-next` depend on validated milestone data
+- Improve error reporting for invalid milestone definitions
+- Keep milestone parsing and validation logic centralized and reusable
+
+### Minimal valid milestone structure
+A milestone should include at least:
+- a recognizable milestone heading, such as:
+  - `## Milestone 1: Title`
+- an objective field
+- optional scope/validation fields may remain optional for now unless already required elsewhere
 
 ### Rules
 - Keep CLI thin
-- Do not duplicate validation logic across commands
+- Do not duplicate milestone validation logic across commands
 - Use Python standard library only
-- Prefer simple readable checks over complex scoring
-- Keep output practical and easy to understand
+- Prefer simple deterministic parsing over flexible but fragile parsing
+- Preserve compatibility with current milestone style where practical
 
-### Suggested readiness checks
-- `docs/vision.txt` exists and is not empty
-- `docs/requirements.md` exists and is not empty
-- `docs/architecture.md` exists and is not empty
-- `docs/milestones.md` exists and contains at least one milestone heading or recognizable milestone entry
-- `docs/decisions.md` may exist even if currently empty, but should still be reported clearly
+### Command behavior expectations
+- `forge milestone-next`
+  - should ignore malformed milestones only if that is explicitly intended
+  - otherwise should fail clearly when milestone definitions are invalid
+- `forge execute-next`
+  - should fail clearly if the next milestone is malformed or incomplete
+- `forge status`
+  - may report milestone validation issues as part of readiness output if practical
 
 ### Tests
 Unit tests:
-- validation reports missing files correctly
-- validation reports empty/template-only files correctly
-- validation distinguishes initialized vs minimally ready project
+- valid milestone blocks parse successfully
+- malformed milestone headings are detected
+- milestones missing objective are detected
+- multiple milestones parse deterministically
+- validation errors are reported clearly
 
 Integration tests:
-- run `forge status` in a temp initialized project with only template content
-- verify output marks project as incomplete
-- fill in minimal content and verify output marks project as ready
-- verify missing-file scenarios are reported clearly
+- temp project with valid milestones supports `milestone-next`
+- temp project with malformed milestones produces clear errors
+- temp project with missing objective prevents execution cleanly
 
 ### Constraints
 - Python standard library only
 - minimal clean changes
-- no large rewrite
+- no large rewrite unless necessary
 
 ### Design intent
-This step makes Forge status meaningful by turning it into a project-health report instead of only a filesystem check.
+This step makes milestone-based workflows reliable by ensuring Forge operates on validated milestone definitions instead of loosely structured markdown.

@@ -232,7 +232,11 @@ class ForgeCLI:
         state_repository = MilestoneStateRepository(Paths.SYSTEM_DIR / "milestone_state.json")
         selector = MilestoneSelector(milestone_service, state_repository)
 
-        next_milestone, report = selector.get_next_milestone_with_report()
+        try:
+            next_milestone, report = selector.get_next_milestone_with_report()
+        except ValueError as exc:
+            print(f"Milestone definition error: {exc}")
+            return
 
         if next_milestone is None:
             kind = report.get("kind")

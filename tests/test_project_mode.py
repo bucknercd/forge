@@ -171,3 +171,38 @@ def test_status_reports_ready_after_content_filled(tmp_path, monkeypatch, capsys
     main()
     out = capsys.readouterr().out
     assert "Project State: ready" in out
+
+
+def test_malformed_milestones_produce_clear_error_for_milestone_next(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    main()
+    _ = capsys.readouterr().out
+
+    (tmp_path / "docs" / "milestones.md").write_text(
+        "# Milestones\n\n## Milestone One\n- **Objective**: Test\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-next"])
+    main()
+    out = capsys.readouterr().out
+    assert "Milestone definition error:" in out
+    assert "Malformed milestone heading" in out
+
+
+def test_missing_objective_prevents_execute_next_cleanly(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    main()
+    _ = capsys.readouterr().out
+
+    (tmp_path / "docs" / "milestones.md").write_text(
+        "# Milestones\n\n## Milestone 1: Bad Milestone\n- **Scope**: S\n- **Validation**: V\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("sys.argv", ["forge", "execute-next"])
+    main()
+    out = capsys.readouterr().out
+    assert "Milestone definition error:" in out
+    assert "missing required objective" in out.lower()

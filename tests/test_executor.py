@@ -44,13 +44,13 @@ def test_execute_milestone_success(tmp_path):
     assert state["1"]["attempts"] == 1
 
 def test_execute_milestone_failure(tmp_path):
-    # Setup milestone file with missing required fields
+    # Setup milestone file with missing scope/validation (objective present)
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"
     Paths.MILESTONES_FILE.write_text("""
 # Milestones
 
 ## Milestone 1: First Task
-- **Objective**: 
+- **Objective**: Exists
 - **Scope**: 
 - **Validation**: 
 """)

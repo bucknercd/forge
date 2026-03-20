@@ -94,3 +94,40 @@ def test_get_milestone(tmp_path):
     assert milestone.objective == "Test objective."
     assert milestone.scope == "Test scope."
     assert milestone.validation == "Test validation."
+
+
+def test_malformed_milestone_heading_detected():
+    content = """# Milestones
+
+## Milestone One
+- **Objective**: Test objective.
+"""
+    with pytest.raises(ValueError) as exc:
+        MilestoneService.parse_milestones(content)
+    assert "Malformed milestone heading" in str(exc.value)
+
+
+def test_missing_objective_detected():
+    content = """# Milestones
+
+## Milestone 1: Missing Objective
+- **Scope**: Test scope.
+- **Validation**: Test validation.
+"""
+    with pytest.raises(ValueError) as exc:
+        MilestoneService.parse_milestones(content)
+    assert "missing required objective" in str(exc.value).lower()
+
+
+def test_multiple_milestones_parse_deterministically():
+    content = """# Milestones
+
+## Milestone 1: First
+- **Objective**: O1
+
+## Milestone 2: Second
+- **Objective**: O2
+"""
+    milestones = MilestoneService.parse_milestones(content)
+    assert [m.id for m in milestones] == [1, 2]
+    assert [m.title for m in milestones] == ["Milestone 1: First", "Milestone 2: Second"]

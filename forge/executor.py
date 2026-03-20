@@ -27,7 +27,13 @@ class Executor:
         state_repository = MilestoneStateRepository(Paths.SYSTEM_DIR / "milestone_state.json")
         selector = MilestoneSelector(milestone_service, state_repository)
 
-        next_milestone, report = selector.get_next_milestone_with_report()
+        try:
+            next_milestone, report = selector.get_next_milestone_with_report()
+        except ValueError as exc:
+            return {
+                "outcome": "none",
+                "message": f"Milestone definition error: {exc}",
+            }
         kind = (report or {}).get("kind")
 
         if next_milestone is None:
@@ -66,7 +72,11 @@ class Executor:
 
     @staticmethod
     def _execute_milestone_internal(milestone_id: int, llm_client: LLMClient | None):
-        milestone = MilestoneService.get_milestone(milestone_id)
+        try:
+            milestone = MilestoneService.get_milestone(milestone_id)
+        except ValueError as exc:
+            print(f"Milestone definition error: {exc}")
+            return
         if not milestone:
             print("Invalid milestone ID.")
             return

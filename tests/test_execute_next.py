@@ -23,11 +23,11 @@ def _write_two_simple_milestones(path):
     )
 
 
-def _write_dependency_milestones(path, prereq_objective_empty=False):
-    # If prereq_objective_empty=True, milestone 1 will fail validation until markdown is fixed.
-    prereq_obj = "" if prereq_objective_empty else "Prereq objective"
-    prereq_scope = "" if prereq_objective_empty else "Prereq scope"
-    prereq_val = "" if prereq_objective_empty else "Prereq validation"
+def _write_dependency_milestones(path, prereq_incomplete=False):
+    # If prereq_incomplete=True, milestone 1 stays parse-valid but fails validation.
+    prereq_obj = "Prereq objective"
+    prereq_scope = "" if prereq_incomplete else "Prereq scope"
+    prereq_val = "" if prereq_incomplete else "Prereq validation"
 
     path.write_text(
         f"""
@@ -160,7 +160,7 @@ def test_execute_next_returns_blocked_when_prereq_failed(tmp_path):
 
 def test_execute_next_integration_runs_prereq_then_dependent(tmp_path):
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_objective_empty=False)
+    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=False)
     Paths.SYSTEM_DIR = tmp_path / ".system"
     Paths.SYSTEM_DIR.mkdir()
 
@@ -180,7 +180,7 @@ def test_execute_next_integration_runs_prereq_then_dependent(tmp_path):
 
 def test_execute_next_integration_skips_blocked_dependent(tmp_path):
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_objective_empty=True)
+    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=True)
     Paths.SYSTEM_DIR = tmp_path / ".system"
     Paths.SYSTEM_DIR.mkdir()
 
@@ -203,7 +203,7 @@ def test_execute_next_integration_skips_blocked_dependent(tmp_path):
 def test_execute_next_resume_after_prereq_recovery(tmp_path):
     # Start with prereq failing; then fix markdown so it can complete and unlock the dependent.
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_objective_empty=True)
+    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=True)
     Paths.SYSTEM_DIR = tmp_path / ".system"
     Paths.SYSTEM_DIR.mkdir()
 
@@ -215,7 +215,7 @@ def test_execute_next_resume_after_prereq_recovery(tmp_path):
     assert state["1"]["status"] == "retry_pending"
 
     # Recover prerequisite by updating milestone 1 fields.
-    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_objective_empty=False)
+    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=False)
 
     second = Executor.execute_next()
     assert second["milestone_id"] == 1
