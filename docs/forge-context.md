@@ -195,24 +195,29 @@ This enables iterative, state-aware project progression.
 
 ## Next TODOs
 
-1. Strengthen quality and trust checks for synthesized milestones
-   - add lightweight quality checks for synthesized milestones before review
-   - flag weak milestones with vague objective, scope, or validation text
-   - detect redundancy against existing milestones
-   - surface clear review warnings in human-readable and JSON output
-   - keep synthesized milestones review-first and never directly active
+### Active TODO
 
-2. Add an end-to-end guarded workflow command
+1. Add an end-to-end guarded workflow command
    - support a higher-level flow such as:
      synthesize milestones -> review/save plan -> apply -> run gates
    - preserve human review and policy enforcement
    - keep execution deterministic even when planning is non-deterministic
+   - ensure each step remains inspectable and debuggable
 
-3. Improve code-oriented artifact execution
+### Upcoming TODOs
+
+2. Improve code-oriented artifact execution
    - expand bounded actions to better support code and config edits
-   - keep file mutation structured and reviewable
-   - avoid unconstrained free-form file rewriting
+   - support common code transformations safely (insert, replace, update blocks)
+   - keep file mutation structured, minimal, and reviewable
+   - avoid unconstrained full-file rewrites
 
-4. Add end-to-end regression coverage for full LLM workflows
-   - test milestone synthesis, reviewed-plan flows, gates, and failure handling with mocked provider responses
-   - ensure LLM-assisted paths remain safe and repeatable under test
+3. Add end-to-end regression coverage for full LLM workflows
+   - test milestone synthesis → plan → preview → apply → gates
+   - use mocked LLM responses for deterministic testing
+   - ensure failure modes remain safe and predictable
+
+4. Improve LLM plan and milestone quality heuristics
+   - refine weak-text detection heuristics
+   - improve redundancy detection beyond simple token overlap
+   - optionally introduce scoring or ranking for generated outputs

@@ -4,6 +4,7 @@ from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from forge.design_manager import MilestoneService
@@ -127,6 +128,71 @@ def _format_markdown_block(milestones: list[dict[str, str]], *, start_id: int) -
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _normalize_tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / float(len(a | b))
+
+
+def _is_weak_text(text: str, *, field: str) -> bool:
+    t = text.strip().lower()
+    words = re.findall(r"[a-z0-9]+", t)
+    if len(words) < 3:
+        return True
+    weak_markers = {
+        "todo",
+        "tbd",
+        "misc",
+        "various",
+        "stuff",
+        "things",
+        "improve",
+        "enhance",
+        "update",
+        "refactor",
+        "cleanup",
+        "fix",
+    }
+    if any(w in weak_markers for w in words):
+        # Allow "validation" to contain "verify/check/assert" signals.
+        if field == "validation" and any(x in words for x in {"verify", "check", "assert"}):
+            return False
+        return True
+    if field == "validation":
+        # Validation should usually mention an observable check signal.
+        if not any(x in words for x in {"contains", "section", "file", "test", "verify", "check", "assert"}):
+            return True
+    return False
+
+
+def quality_warnings_for_synthesized(
+    synthesized: list[dict[str, str]], existing: list[Any]
+) -> list[str]:
+    warnings: list[str] = []
+
+    existing_title_tokens = [_normalize_tokens(getattr(m, "title", "")) for m in existing]
+    existing_obj_tokens = [_normalize_tokens(getattr(m, "objective", "")) for m in existing]
+    for idx, m in enumerate(synthesized, start=1):
+        if _is_weak_text(m["objective"], field="objective"):
+            warnings.append(f"Milestone {idx} has weak/generic objective text.")
+        if _is_weak_text(m["scope"], field="scope"):
+            warnings.append(f"Milestone {idx} has weak/generic scope text.")
+        if _is_weak_text(m["validation"], field="validation"):
+            warnings.append(f"Milestone {idx} has weak validation text (not clearly testable).")
+
+        t_tokens = _normalize_tokens(m["title"])
+        o_tokens = _normalize_tokens(m["objective"])
+        if any(_jaccard(t_tokens, e) >= 0.75 for e in existing_title_tokens if e):
+            warnings.append(f"Milestone {idx} title appears redundant with existing milestones.")
+        if any(_jaccard(o_tokens, e) >= 0.75 for e in existing_obj_tokens if e):
+            warnings.append(f"Milestone {idx} objective appears redundant with existing milestones.")
+    return warnings
+
+
 def synthesize_milestones(
     llm_client: LLMClient,
     *,
@@ -137,6 +203,7 @@ def synthesize_milestones(
     milestones, warnings = parse_synthesized_milestones(raw, desired_count=desired_count)
 
     existing = MilestoneService.list_milestones()
+    quality_warnings = quality_warnings_for_synthesized(milestones, existing)
     preview_markdown = _format_markdown_block(milestones, start_id=len(existing) + 1)
     # Sanity-check parseability with existing parser before persisting.
     _ = MilestoneService.parse_milestones("# Milestones\n\n" + preview_markdown)
@@ -152,6 +219,7 @@ def synthesize_milestones(
             "llm_model": getattr(llm_client, "model_name", None),
         },
         "warnings": warnings,
+        "quality_warnings": quality_warnings,
         "desired_count": desired_count,
         "source_hashes": {
             "requirements": _file_hash(Paths.REQUIREMENTS_FILE),
@@ -203,5 +271,7 @@ def accept_synthesized_milestones(synthesis_id: str) -> dict[str, Any]:
         "ok": True,
         "synthesis_id": synthesis_id,
         "accepted_count": len(milestones),
+        "warnings": payload.get("warnings", []),
+        "quality_warnings": payload.get("quality_warnings", []),
         "message": f"Accepted {len(milestones)} synthesized milestone(s).",
     }

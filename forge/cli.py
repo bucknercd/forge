@@ -688,6 +688,8 @@ class ForgeCLI:
         print(payload.get("markdown_preview", "").rstrip())
         for w in payload.get("warnings", []):
             print(f"Warning: {w}")
+        for w in payload.get("quality_warnings", []):
+            print(f"Quality warning: {w}")
         print(f"Use: forge milestone-synthesis-accept {payload.get('synthesis_id')}")
         return True
 
@@ -707,6 +709,10 @@ class ForgeCLI:
             return True
         print(f"Synthesized milestone artifact: {synthesis_id}")
         print(payload.get("markdown_preview", "").rstrip())
+        for w in payload.get("warnings", []):
+            print(f"Warning: {w}")
+        for w in payload.get("quality_warnings", []):
+            print(f"Quality warning: {w}")
         return True
 
     @staticmethod
@@ -719,6 +725,10 @@ class ForgeCLI:
             print(payload.get("message", "Failed to accept synthesized milestones."))
             return False
         print(payload.get("message", "Accepted synthesized milestones."))
+        for w in payload.get("warnings", []):
+            print(f"Warning: {w}")
+        for w in payload.get("quality_warnings", []):
+            print(f"Quality warning: {w}")
         return True
 
 def main() -> int:
