@@ -114,6 +114,7 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
     assert preview_payload["ok"] is True
     assert "planner_metadata" in preview_payload
     assert "warnings" in preview_payload
+    assert "review_enforcement" in preview_payload
     plan_id = preview_payload["plan_id"]
 
     monkeypatch.setattr("sys.argv", ["forge", "milestone-apply-plan", plan_id, "--json"])
@@ -123,6 +124,7 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
     assert apply_payload["plan_id"] == plan_id
     assert "planner_metadata" in apply_payload
     assert "warnings" in apply_payload
+    assert "review_enforcement" in apply_payload
 
 
 def test_apply_reviewed_plan_with_validation_gate_fail(tmp_path):

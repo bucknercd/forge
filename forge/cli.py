@@ -29,6 +29,19 @@ from forge.policy_config import (
 )
 from forge.planner_resolver import resolve_planner
 
+
+def _review_enforcement_status(planner, policy, *, save_plan: bool) -> dict:
+    enabled = bool(getattr(policy, "require_review_for_nondeterministic", False))
+    required = bool(planner and planner.metadata().get("is_nondeterministic"))
+    compliant = (not enabled) or (not required) or bool(save_plan)
+    return {
+        "enabled": enabled,
+        "required_for_plan": required and enabled,
+        "compliant": compliant,
+        "requires_save_plan": bool(enabled and required),
+    }
+
+
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
         self.task = task
@@ -410,7 +423,7 @@ class ForgeCLI:
         planner_mode: str | None = None,
     ):
         """Dry-run preview of milestone execution (no writes)."""
-        planner, planner_err = resolve_planner(mode_override=planner_mode)
+        planner, planner_policy, planner_err = resolve_planner(mode_override=planner_mode)
         if planner_err:
             if json_mode:
                 print(
@@ -425,6 +438,27 @@ class ForgeCLI:
             else:
                 print(planner_err)
             return
+        assert planner is not None
+        enforcement = _review_enforcement_status(planner, planner_policy, save_plan=save_plan)
+        if enforcement["requires_save_plan"] and not save_plan:
+            msg = (
+                "Policy requires reviewed-plan workflow for non-deterministic planners. "
+                "Re-run with --save-plan and apply via milestone-apply-plan."
+            )
+            payload = {
+                "ok": False,
+                "message": msg,
+                "errors": [msg],
+                "planner_mode": planner.mode,
+                "planner_metadata": planner.metadata(),
+                "review_enforcement": enforcement,
+            }
+            if json_mode:
+                print(json.dumps(serialize_preview_result(payload), indent=2, sort_keys=True))
+            else:
+                print(msg)
+                print("Enforcement: reviewed-plan required for this planner.")
+            return
 
         if save_plan and milestone_id is None:
             result = Executor.preview_next() if planner and planner.mode == "deterministic" else None
@@ -432,11 +466,11 @@ class ForgeCLI:
                 result = {"ok": False, "message": "Save-plan without milestone ID requires deterministic planner."}
             if result.get("ok") and result.get("milestone_id") is not None:
                 result = Executor.save_reviewed_plan_for_milestone(
-                    result["milestone_id"], planner=planner
+                    result["milestone_id"], planner=planner, review_enforcement=enforcement
                 )
         elif save_plan:
             result = Executor.save_reviewed_plan_for_milestone(
-                milestone_id, planner=planner
+                milestone_id, planner=planner, review_enforcement=enforcement
             )
         else:
             if milestone_id is None:
@@ -450,6 +484,7 @@ class ForgeCLI:
                     }
             else:
                 result = Executor.preview_milestone(milestone_id, planner=planner)
+        result["review_enforcement"] = enforcement
         if json_mode:
             print(json.dumps(serialize_preview_result(result), indent=2, sort_keys=True))
             return
@@ -473,6 +508,9 @@ class ForgeCLI:
             print(f"Reviewed Plan ID: {result['plan_id']}")
         for w in result.get("warnings", []):
             print(f"Warning: {w}")
+        enf = result.get("review_enforcement", {})
+        if enf.get("required_for_plan"):
+            print("Enforcement: reviewed-plan required by policy (compliant).")
         print(f"Artifact Summary: {result.get('artifact_summary', '')}")
         files = result.get("files_changed", [])
         print("Targeted Artifacts:")
@@ -572,6 +610,7 @@ class ForgeCLI:
             test_timeout_seconds=resolved_policy.test_timeout_seconds,
             test_output_max_chars=resolved_policy.test_output_max_chars,
         )
+        result["review_enforcement"] = result.get("review_enforcement", {})
         if json_mode:
             print(json.dumps(serialize_apply_plan_result(result), indent=2, sort_keys=True))
             return bool(result.get("ok"))
@@ -592,6 +631,9 @@ class ForgeCLI:
         print(planner_line)
         for w in result.get("warnings", []):
             print(f"Warning: {w}")
+        enf = result.get("review_enforcement", {})
+        if enf.get("required_for_plan"):
+            print("Enforcement: reviewed-plan policy satisfied.")
         print(f"Artifact Summary: {result.get('artifact_summary', '')}")
         if result.get("gate_summary"):
             print(f"Gates: {result.get('gate_summary')}")

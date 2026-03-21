@@ -65,6 +65,7 @@ def save_reviewed_plan(
     planner_mode: str = "deterministic",
     planner_metadata: dict[str, Any] | None = None,
     warnings: list[str] | None = None,
+    review_enforcement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     reviewed_plan_dir().mkdir(parents=True, exist_ok=True)
     p_hash = plan_hash(plan)
@@ -85,6 +86,7 @@ def save_reviewed_plan(
         "planner_mode": planner_mode,
         "planner_metadata": planner_metadata or {"mode": planner_mode},
         "warnings": list(warnings or []),
+        "review_enforcement": dict(review_enforcement or {}),
         "created_at": datetime.now().isoformat(),
         "plan_hash": p_hash,
         "milestones_file_hash": _file_hash(Paths.MILESTONES_FILE),

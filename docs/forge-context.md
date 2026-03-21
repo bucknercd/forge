@@ -195,14 +195,15 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add policy-based review enforcement for LLM-generated plans.
+Add a real LLM-backed planner implementation behind the existing planner interface.
 
-- support a repo policy toggle to require reviewed-plan workflow for non-deterministic planners
-- fail clearly when an LLM-generated plan is used in a path that violates review policy
-- preserve deterministic planner behavior as the default and least restrictive path
-- surface enforcement status clearly in human-readable and JSON output
-- keep planner provenance and warning metadata intact
-- avoid overengineering; start with a simple repo policy switch
+- implement an LLM planner that generates milestone preview plans from repository state
+- keep the planner behind the current planner selection flow so deterministic planners still work unchanged
+- make the first version narrow and predictable: one prompt, one response shape, one parser
+- validate and normalize LLM output into the same internal plan structure used by existing workflows
+- fail clearly when LLM output is malformed, incomplete, or cannot be parsed safely
+- preserve planner provenance metadata so outputs clearly show LLM-generated origin
+- avoid applying plans directly; continue routing non-deterministic plans through reviewed-plan safeguards
 
 Goal:
-Allow repositories to enforce stronger safety rules for LLM-generated plans without changing deterministic defaults.
+Introduce a real non-deterministic planner without weakening the existing deterministic path or review guarantees.

@@ -28,6 +28,7 @@ class PlannerPolicy:
     mode: str = "deterministic"  # deterministic | llm
     llm_client: str | None = None  # stub | openai
     llm_model: str | None = None  # non-secret model id for provider-backed clients
+    require_review_for_nondeterministic: bool = False
 
 
 def policy_file_path() -> Path:
@@ -105,14 +106,27 @@ def load_planner_policy() -> tuple[PlannerPolicy, str | None]:
                 f"'llm_client' must be one of: {', '.join(sorted(_LLM_CLIENT_IDS))}."
             )
         llm_model = _get_opt_str(section, "llm_model", default=None)
+        require_review = _get_bool(
+            section, "require_review_for_nondeterministic", default=False
+        )
     except ValueError as exc:
         return PlannerPolicy(), f"Invalid policy file {path}: {exc}"
-    return PlannerPolicy(mode=mode, llm_client=llm_client, llm_model=llm_model), None
+    return PlannerPolicy(
+        mode=mode,
+        llm_client=llm_client,
+        llm_model=llm_model,
+        require_review_for_nondeterministic=require_review,
+    ), None
 
 
 def merge_planner_policy(base: PlannerPolicy, *, mode_override: str | None) -> PlannerPolicy:
     mode = mode_override or base.mode
-    return PlannerPolicy(mode=mode, llm_client=base.llm_client, llm_model=base.llm_model)
+    return PlannerPolicy(
+        mode=mode,
+        llm_client=base.llm_client,
+        llm_model=base.llm_model,
+        require_review_for_nondeterministic=base.require_review_for_nondeterministic,
+    )
 
 
 def merge_reviewed_apply_policy(

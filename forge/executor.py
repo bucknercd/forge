@@ -169,7 +169,9 @@ class Executor:
 
     @staticmethod
     def save_reviewed_plan_for_milestone(
-        milestone_id: int, planner: Planner | None = None
+        milestone_id: int,
+        planner: Planner | None = None,
+        review_enforcement: dict | None = None,
     ) -> dict:
         planner = planner or DeterministicPlanner()
         preview = Executor.preview_milestone(milestone_id, planner=planner)
@@ -187,9 +189,11 @@ class Executor:
                 planner_mode=planner.mode,
                 planner_metadata=preview.get("planner_metadata", planner.metadata()),
                 warnings=preview.get("warnings", []),
+                review_enforcement=review_enforcement,
             )
             preview["plan_id"] = payload["plan_id"]
             preview["plan_file"] = str((Paths.SYSTEM_DIR / "reviewed_plans" / f"{payload['plan_id']}.json"))
+            preview["review_enforcement"] = payload.get("review_enforcement", review_enforcement or {})
             return preview
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "message": f"Failed to save reviewed plan: {exc}"}
@@ -304,6 +308,7 @@ class Executor:
             "title": milestone.title,
             "planner_mode": payload.get("planner_mode", "deterministic"),
             "planner_metadata": payload.get("planner_metadata", {}),
+            "review_enforcement": payload.get("review_enforcement", {}),
             "ok": ok_final,
             "apply_ok": apply_ok,
             "gates_ok": gates_ok,
@@ -350,6 +355,7 @@ class Executor:
             "title": milestone.title,
             "planner_mode": payload.get("planner_mode", "deterministic"),
             "planner_metadata": payload.get("planner_metadata", {}),
+            "review_enforcement": payload.get("review_enforcement", {}),
             "artifact_summary": artifact_summary,
             "gate_summary": gate_summary,
             "gate_results": gates,
