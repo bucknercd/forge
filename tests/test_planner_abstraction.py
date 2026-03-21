@@ -19,6 +19,20 @@ class FakeLLM(LLMClient):
         return self._output
 
 
+class CapturingLLM(LLMClient):
+    def __init__(self, output: str):
+        self._output = output
+        self.last_prompt = ""
+
+    @property
+    def client_id(self) -> str:
+        return "capture"
+
+    def generate(self, prompt: str) -> str:
+        self.last_prompt = prompt
+        return self._output
+
+
 def test_deterministic_planner_matches_existing_builder(tmp_path):
     configure_project(
         tmp_path,
@@ -68,6 +82,39 @@ def test_llm_planner_builds_valid_execution_plan(tmp_path):
     assert len(plan.actions) == 2
 
 
+def test_llm_planner_prompt_includes_repo_context(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: LLM Context
+- **Objective**: Capture context
+- **Scope**: Use artifacts
+- **Validation**: Must parse
+""",
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    llm = CapturingLLM(
+        json.dumps(
+            {
+                "actions": [
+                    "append_section requirements Overview | CONTEXT_OK",
+                    "mark_milestone_completed",
+                ]
+            }
+        )
+    )
+    _plan = LLMPlanner(llm).build_plan(milestone)
+    prompt = llm.last_prompt
+    assert "Repository context excerpts" in prompt
+    assert "=== requirements.md ===" in prompt
+    assert "Base content." in prompt
+    assert "Milestone:" in prompt
+    assert "Capture context" in prompt
+
+
 def test_llm_planner_invalid_output_fails_clearly(tmp_path):
     configure_project(
         tmp_path,
@@ -86,6 +133,26 @@ def test_llm_planner_invalid_output_fails_clearly(tmp_path):
     with pytest.raises(ValueError) as exc:
         planner.build_plan(milestone)
     assert "LLM planner action 1 invalid" in str(exc.value)
+
+
+def test_llm_planner_missing_actions_fails_without_fallback(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: LLM Missing Actions
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+""",
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    planner = LLMPlanner(FakeLLM(json.dumps({"summary": "not a plan"})), fallback_to_milestone_actions=False)
+    with pytest.raises(ValueError) as exc:
+        planner.build_plan(milestone)
+    assert "actions" in str(exc.value).lower()
 
 
 def test_llm_generated_plan_flows_through_reviewed_save_and_apply(tmp_path):

@@ -209,3 +209,30 @@ def test_deterministic_preview_unaffected_when_review_enforcement_enabled(
     assert payload["ok"] is True
     assert payload["planner_mode"] == "deterministic"
     assert payload["review_enforcement"]["required_for_plan"] is False
+
+
+def test_openai_planner_still_blocked_by_review_enforcement_without_save_plan(
+    tmp_path, monkeypatch, capsys
+):
+    _bootstrap(tmp_path, monkeypatch, capsys)
+    monkeypatch.setenv("FORGE_OPENAI_API_KEY", "sk-test")
+    (tmp_path / "forge-policy.json").write_text(
+        json.dumps(
+            {
+                "planner": {
+                    "mode": "llm",
+                    "llm_client": "openai",
+                    "llm_model": "gpt-4o-mini",
+                    "require_review_for_nondeterministic": True,
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--json"])
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "requires reviewed-plan workflow" in payload["message"]
+    assert payload["planner_metadata"]["llm_client"] == "openai"

@@ -8,6 +8,7 @@ from forge.execution.models import ExecutionPlan
 from forge.execution.parse import parse_forge_action_line
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.llm import LLMClient
+from forge.paths import Paths
 
 
 class Planner:
@@ -42,39 +43,21 @@ class LLMPlanner(Planner):
     fallback_to_milestone_actions: bool = True
 
     def build_plan(self, milestone: Milestone) -> ExecutionPlan:
-        prompt = (
-            "Generate a Forge execution plan for this milestone.\n"
-            "Return ONLY valid JSON object: {\"actions\": [\"...\"]}\n"
-            "Allowed action formats:\n"
-            "- append_section <target> <Section Heading> | <body>\n"
-            "- replace_section <target> <Section Heading> | <body>\n"
-            "- add_decision | <title> | <rationale>\n"
-            "- mark_milestone_completed\n"
-            "Allowed targets: requirements, architecture, decisions, milestones.\n\n"
-            f"Milestone ID: {milestone.id}\n"
-            f"Title: {milestone.title}\n"
-            f"Objective: {milestone.objective}\n"
-            f"Scope: {milestone.scope}\n"
-            f"Validation: {milestone.validation}\n"
-        )
+        prompt = _build_llm_plan_prompt(milestone)
         raw = self.llm_client.generate(prompt)
-        try:
-            parsed = json.loads(raw)
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"LLM planner returned invalid JSON: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError("LLM planner output must be a JSON object.")
-        actions_raw = parsed.get("actions")
-        if not isinstance(actions_raw, list):
-            if self.fallback_to_milestone_actions and milestone.forge_actions:
-                actions_raw = list(milestone.forge_actions)
-            else:
-                raise ValueError("LLM planner output must include an 'actions' array.")
+        actions_raw = _parse_llm_actions(
+            raw,
+            fallback_actions=milestone.forge_actions if self.fallback_to_milestone_actions else None,
+        )
+        if not actions_raw:
+            raise ValueError("LLM planner output produced an empty actions list.")
 
         actions = []
         for idx, item in enumerate(actions_raw, start=1):
             if not isinstance(item, str):
                 raise ValueError(f"LLM planner action {idx} must be a string.")
+            if not item.strip():
+                raise ValueError(f"LLM planner action {idx} must be non-empty.")
             try:
                 actions.append(parse_forge_action_line(item, milestone))
             except ValueError as exc:
@@ -88,3 +71,61 @@ class LLMPlanner(Planner):
             "llm_client": getattr(self.llm_client, "client_id", "unknown"),
             "llm_model": getattr(self.llm_client, "model_name", None),
         }
+
+
+def _doc_excerpt(path, *, max_chars: int = 1200) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return "(unavailable)"
+    trimmed = text.strip()
+    if not trimmed:
+        return "(empty)"
+    if len(trimmed) > max_chars:
+        return trimmed[:max_chars] + "\n...[truncated]"
+    return trimmed
+
+
+def _build_llm_plan_prompt(milestone: Milestone) -> str:
+    requirements = _doc_excerpt(Paths.REQUIREMENTS_FILE)
+    architecture = _doc_excerpt(Paths.ARCHITECTURE_FILE)
+    decisions = _doc_excerpt(Paths.DECISIONS_FILE)
+    return (
+        "You are generating a Forge milestone execution plan.\n"
+        "Return ONLY a JSON object with this exact shape:\n"
+        "{\"actions\": [\"<forge-action-line>\", \"...\"]}\n\n"
+        "Hard constraints:\n"
+        "- No prose, no markdown, no code fences.\n"
+        "- Use only these action verbs:\n"
+        "  append_section <target> <Section Heading> | <body>\n"
+        "  replace_section <target> <Section Heading> | <body>\n"
+        "  add_decision | <title> | <rationale>\n"
+        "  mark_milestone_completed\n"
+        "- Allowed targets: requirements, architecture, decisions, milestones.\n"
+        "- Prefer a small plan (2-8 actions) that satisfies the milestone.\n\n"
+        "Milestone:\n"
+        f"- id: {milestone.id}\n"
+        f"- title: {milestone.title}\n"
+        f"- objective: {milestone.objective}\n"
+        f"- scope: {milestone.scope}\n"
+        f"- validation: {milestone.validation}\n\n"
+        "Repository context excerpts:\n"
+        f"=== requirements.md ===\n{requirements}\n\n"
+        f"=== architecture.md ===\n{architecture}\n\n"
+        f"=== decisions.md ===\n{decisions}\n"
+    )
+
+
+def _parse_llm_actions(raw: str, fallback_actions: list[str] | None) -> list[str]:
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"LLM planner returned invalid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM planner output must be a JSON object.")
+    actions_raw = parsed.get("actions")
+    if not isinstance(actions_raw, list):
+        if fallback_actions:
+            return list(fallback_actions)
+        raise ValueError("LLM planner output must include an 'actions' array.")
+    return actions_raw

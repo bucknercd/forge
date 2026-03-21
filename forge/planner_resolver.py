@@ -25,5 +25,6 @@ def resolve_planner(mode_override: str | None = None) -> tuple[Planner | None, P
         if llm_err:
             return None, effective, llm_err
         assert client is not None
-        return LLMPlanner(client), effective, None
+        fallback = getattr(client, "client_id", "") == "stub"
+        return LLMPlanner(client, fallback_to_milestone_actions=fallback), effective, None
     return None, effective, f"Unsupported planner mode '{effective.mode}'."
