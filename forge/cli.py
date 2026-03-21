@@ -272,25 +272,25 @@ class ForgeCLI:
             print(f"Removed entries: {len(result['removed'])}")
 
     @staticmethod
-    def milestone_lint(milestone_id: int | None = None):
+    def milestone_lint(milestone_id: int | None = None) -> bool:
         """Lint milestone action/validation definitions without executing actions."""
         if not Paths.MILESTONES_FILE.exists():
             print("Milestones file is missing.")
-            return
+            return False
 
         try:
             milestones = MilestoneService.list_milestones()
         except ValueError as exc:
             print(f"Milestone definition error: {exc}")
             print("Lint Summary: 1 error(s) across 0 milestone(s) checked.")
-            return
+            return False
 
         if milestone_id is not None:
             milestones = [m for m in milestones if m.id == milestone_id]
             if not milestones:
                 print(f"Milestone {milestone_id} not found.")
                 print("Lint Summary: 1 error(s) across 0 milestone(s) checked.")
-                return
+                return False
 
         total_errors = 0
         checked = 0
@@ -322,6 +322,7 @@ class ForgeCLI:
                 print(f"[OK] Milestone {m.id}: {m.title}")
 
         print(f"Lint Summary: {total_errors} error(s) across {checked} milestone(s) checked.")
+        return total_errors == 0
 
     @staticmethod
     def execute_next():
@@ -334,7 +335,7 @@ class ForgeCLI:
             # Provide a tiny bit of context without leaking orchestration internals.
             print(f"Milestone ID: {milestone_id}")
 
-def main():
+def main() -> int:
     Paths.refresh()
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -383,7 +384,7 @@ def main():
                 print("Missing:")
                 for path in missing:
                     print(f"- {path}")
-            return
+            return 0
 
     if args.command == "init":
         ForgeCLI.init()
@@ -408,11 +409,12 @@ def main():
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
     elif args.command == "milestone-lint":
-        ForgeCLI.milestone_lint(args.id)
+        return 0 if ForgeCLI.milestone_lint(args.id) else 1
     elif args.command == "execute-next":
         ForgeCLI.execute_next()
     else:
         parser.print_help()
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

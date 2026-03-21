@@ -211,3 +211,87 @@ def test_missing_objective_prevents_execute_next_cleanly(tmp_path, monkeypatch, 
     out = capsys.readouterr().out
     assert "Milestone definition error:" in out
     assert "missing required objective" in out.lower()
+
+
+def test_milestone_lint_main_returns_zero_on_success(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    assert main() == 0
+    _ = capsys.readouterr().out
+
+    (tmp_path / "docs" / "milestones.md").write_text(
+        """
+# Milestones
+
+## Milestone 1: Good
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+- **Forge Actions**:
+  - append_section requirements Overview | OK
+- **Forge Validation**:
+  - file_contains requirements OK
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-lint"])
+    rc = main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Lint Summary: 0 error(s) across 1 milestone(s) checked." in out
+
+
+def test_milestone_lint_main_returns_one_on_failure_all(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    assert main() == 0
+    _ = capsys.readouterr().out
+
+    (tmp_path / "docs" / "milestones.md").write_text(
+        """
+# Milestones
+
+## Milestone 1: Bad
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+- **Forge Actions**:
+  - append_section badtarget Overview | BAD
+- **Forge Validation**:
+  - file_contains requirements BAD
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-lint"])
+    rc = main()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "[FAIL] Milestone 1" in out
+
+
+def test_milestone_lint_main_returns_one_on_failure_specific_id(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    assert main() == 0
+    _ = capsys.readouterr().out
+
+    (tmp_path / "docs" / "milestones.md").write_text(
+        """
+# Milestones
+
+## Milestone 1: Good
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+- **Forge Actions**:
+  - append_section requirements Overview | GOOD
+- **Forge Validation**:
+  - file_contains requirements GOOD
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-lint", "99"])
+    rc = main()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Milestone 99 not found." in out

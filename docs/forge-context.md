@@ -176,14 +176,17 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add a milestone lint command for pre-execution validation.
+Add diff-aware execution reporting for milestone runs.
 
-- implement `forge milestone-lint`
-- run milestone parsing and Forge Actions / Validation parsing without executing
-- reuse existing line-aware diagnostics
-- output clear, actionable errors with milestone id and line numbers
-- fail fast on malformed definitions
-- support validating a single milestone or all milestones
+- capture before/after content for changed artifacts
+- record per-action outcomes:
+  - changed
+  - skipped as idempotent
+  - failed
+- include concise diffs in execution results
+- improve run history with a summary of artifact changes
+- keep reporting deterministic and file-based
+- avoid storing full file contents when a concise diff is enough
 
 Goal:
-Allow users to validate milestone correctness before running execution.
+Make milestone execution easy to inspect, review, and debug after a run.
