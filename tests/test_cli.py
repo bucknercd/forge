@@ -302,3 +302,81 @@ def test_status_formats_milestone_states_consistently(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Milestone 1: status=in_progress, attempts=0" in out
     assert "Milestone 2: status=not_started, attempts=0" in out
+
+
+def test_milestone_lint_all_reports_ok(tmp_path, capsys):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.MILESTONES_FILE.write_text(
+        """
+# Milestones
+
+## Milestone 1: Good
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+- **Forge Actions**:
+  - append_section requirements Overview | GOOD
+- **Forge Validation**:
+  - file_contains requirements GOOD
+
+## Milestone 2: Good2
+- **Objective**: O2
+- **Scope**: S2
+- **Validation**: V2
+- **Forge Actions**:
+  - append_section architecture Design | TEXT
+- **Forge Validation**:
+  - file_contains architecture TEXT
+""",
+        encoding="utf-8",
+    )
+    ForgeCLI.milestone_lint()
+    out = capsys.readouterr().out
+    assert "[OK] Milestone 1" in out
+    assert "[OK] Milestone 2" in out
+    assert "Lint Summary: 0 error(s) across 2 milestone(s) checked." in out
+
+
+def test_milestone_lint_specific_id_and_parse_error(tmp_path, capsys):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.MILESTONES_FILE.write_text(
+        """
+# Milestones
+
+## Milestone 1: Good
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+- **Forge Actions**:
+  - append_section requirements Overview | GOOD
+- **Forge Validation**:
+  - file_contains requirements GOOD
+
+## Milestone 2: Bad
+- **Objective**: O2
+- **Scope**: S2
+- **Validation**: V2
+- **Forge Actions**:
+  - append_section badtarget Overview | BAD
+- **Forge Validation**:
+  - file_contains requirements BAD
+""",
+        encoding="utf-8",
+    )
+    ForgeCLI.milestone_lint(2)
+    out = capsys.readouterr().out
+    assert "[FAIL] Milestone 2" in out
+    assert "line" in out
+    assert "Lint Summary: 1 error(s) across 1 milestone(s) checked." in out
+
+
+def test_milestone_lint_missing_id_reports_error(tmp_path, capsys):
+    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
+    Paths.MILESTONES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _write_two_milestones(Paths.MILESTONES_FILE)
+    ForgeCLI.milestone_lint(99)
+    out = capsys.readouterr().out
+    assert "Milestone 99 not found." in out
+    assert "Lint Summary: 1 error(s) across 0 milestone(s) checked." in out

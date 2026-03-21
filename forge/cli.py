@@ -16,6 +16,7 @@ from forge.milestone_state import MilestoneStateRepository
 from forge.milestone_sync import sync_milestone_state
 from forge.milestone_state import normalize_milestone_state_value
 from forge.project_status import analyze_project_status
+from forge.execution.plan import ExecutionPlanBuilder
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -271,6 +272,58 @@ class ForgeCLI:
             print(f"Removed entries: {len(result['removed'])}")
 
     @staticmethod
+    def milestone_lint(milestone_id: int | None = None):
+        """Lint milestone action/validation definitions without executing actions."""
+        if not Paths.MILESTONES_FILE.exists():
+            print("Milestones file is missing.")
+            return
+
+        try:
+            milestones = MilestoneService.list_milestones()
+        except ValueError as exc:
+            print(f"Milestone definition error: {exc}")
+            print("Lint Summary: 1 error(s) across 0 milestone(s) checked.")
+            return
+
+        if milestone_id is not None:
+            milestones = [m for m in milestones if m.id == milestone_id]
+            if not milestones:
+                print(f"Milestone {milestone_id} not found.")
+                print("Lint Summary: 1 error(s) across 0 milestone(s) checked.")
+                return
+
+        total_errors = 0
+        checked = 0
+        for m in milestones:
+            checked += 1
+            errors: list[str] = []
+
+            if not m.forge_actions:
+                errors.append("Missing Forge Actions block.")
+            if m.forge_actions and not m.forge_validation:
+                errors.append("Missing Forge Validation block.")
+
+            if not errors:
+                try:
+                    _plan = ExecutionPlanBuilder.build(m)
+                except ValueError as exc:
+                    errors.append(str(exc))
+                try:
+                    _rules = ExecutionPlanBuilder.parse_validation_rules(m)
+                except ValueError as exc:
+                    errors.append(str(exc))
+
+            if errors:
+                total_errors += len(errors)
+                print(f"[FAIL] Milestone {m.id}: {m.title}")
+                for e in errors:
+                    print(f"  - {e}")
+            else:
+                print(f"[OK] Milestone {m.id}: {m.title}")
+
+        print(f"Lint Summary: {total_errors} error(s) across {checked} milestone(s) checked.")
+
+    @staticmethod
     def execute_next():
         """Execute the next eligible milestone in one orchestration step."""
         result = Executor.execute_next()
@@ -311,6 +364,12 @@ def main():
 
     subparsers.add_parser("milestone-next", help="Print the next milestone")
     subparsers.add_parser("milestone-sync-state", help="Reconcile milestone state with parsed milestones")
+    milestone_lint_parser = subparsers.add_parser(
+        "milestone-lint", help="Lint milestone execution definitions"
+    )
+    milestone_lint_parser.add_argument(
+        "id", nargs="?", type=int, help="Optional milestone ID to lint"
+    )
     subparsers.add_parser("execute-next", help="Execute the next eligible milestone")
 
     args = parser.parse_args()
@@ -348,6 +407,8 @@ def main():
         ForgeCLI.milestone_next()
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
+    elif args.command == "milestone-lint":
+        ForgeCLI.milestone_lint(args.id)
     elif args.command == "execute-next":
         ForgeCLI.execute_next()
     else:
