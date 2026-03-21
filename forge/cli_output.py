@@ -56,6 +56,7 @@ def serialize_apply_plan_result(payload: dict[str, Any]) -> dict[str, Any]:
         "artifact_summary": payload.get("artifact_summary", ""),
         "gate_summary": payload.get("gate_summary", ""),
         "gate_results": payload.get("gate_results", []),
+        "policy": payload.get("policy", {}),
         "result_artifact": payload.get("result_artifact"),
         "targeted_artifacts": payload.get("files_changed", []),
         "actions_applied": payload.get("actions_applied", []),

@@ -176,17 +176,15 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add repo-configured policy defaults for reviewed-plan workflows.
+Add optional LLM-assisted plan generation for milestones.
 
-- introduce a repo config file for Forge policy and command defaults
-- allow configuration of reviewed-plan apply defaults such as:
-  - whether validation gate should run by default
-  - default test command
-  - timeout / output limits for test gates
-- keep CLI flags able to override config explicitly
-- preserve current behavior when no config is present
-- keep configuration deterministic and file-based
-- surface clear diagnostics for invalid config
+- introduce an optional planner interface that can generate bounded execution plans from milestone definitions
+- keep deterministic plan generation as the default path
+- require all LLM-generated plans to conform to the existing ExecutionPlan and action schema
+- route generated plans through existing preview, reviewed-plan, stale-check, and gate workflows
+- prevent the planner from mutating files directly
+- surface clear diagnostics when generated plans are invalid or unsupported
+- keep the feature opt-in and configurable by repo policy or CLI
 
 Goal:
-Make Forge safer and easier to use consistently across a repository without hardcoding workflow policy into commands.
+Allow Forge to use an LLM as an optional planning assistant while preserving deterministic execution, human review, and verification controls.

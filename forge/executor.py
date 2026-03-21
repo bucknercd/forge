@@ -180,6 +180,8 @@ class Executor:
         *,
         run_validation_gate: bool,
         test_command: str | None,
+        test_timeout_seconds: int = 120,
+        test_output_max_chars: int = 1200,
     ) -> dict:
         payload = load_reviewed_plan(plan_id)
         if payload is None:
@@ -226,6 +228,8 @@ class Executor:
             milestone_id,
             run_validation_gate=run_validation_gate,
             test_command=test_command,
+            timeout_seconds=test_timeout_seconds,
+            output_max_chars=test_output_max_chars,
         )
         gates_ok = all(g.get("ok") for g in gates) if gates else True
         apply_ok = len(apply_result.errors) == 0
@@ -244,6 +248,12 @@ class Executor:
             "artifact_summary": artifact_summary,
             "gate_summary": gate_summary,
             "gate_results": gates,
+            "policy": {
+                "run_validation_gate": run_validation_gate,
+                "test_command": test_command,
+                "test_timeout_seconds": test_timeout_seconds,
+                "test_output_max_chars": test_output_max_chars,
+            },
             "files_changed": apply_result.normalized_files_changed(),
             "actions_applied": apply_result.actions_applied,
             "errors": apply_result.errors,
@@ -278,6 +288,12 @@ class Executor:
             "artifact_summary": artifact_summary,
             "gate_summary": gate_summary,
             "gate_results": gates,
+            "policy": {
+                "run_validation_gate": run_validation_gate,
+                "test_command": test_command,
+                "test_timeout_seconds": test_timeout_seconds,
+                "test_output_max_chars": test_output_max_chars,
+            },
             "files_changed": apply_result.normalized_files_changed(),
             "actions_applied": apply_result.actions_applied,
             "errors": apply_result.errors,

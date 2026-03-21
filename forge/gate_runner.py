@@ -13,6 +13,7 @@ def run_gates_for_milestone(
     run_validation_gate: bool = False,
     test_command: str | None = None,
     timeout_seconds: int = 120,
+    output_max_chars: int = 1200,
 ) -> list[dict[str, Any]]:
     """
     Run explicit post-apply gates. Returns deterministic structured results.
@@ -50,7 +51,7 @@ def run_gates_for_milestone(
                     check=False,
                 )
                 output = (proc.stdout or "") + (proc.stderr or "")
-                max_len = 1200
+                max_len = output_max_chars
                 if len(output) > max_len:
                     output = output[:max_len] + "\n... [output truncated]"
                 ok = proc.returncode == 0

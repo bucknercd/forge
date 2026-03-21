@@ -22,6 +22,11 @@ from forge.cli_output import (
     serialize_lint_result,
     serialize_preview_result,
 )
+from forge.policy_config import (
+    ReviewedApplyPolicy,
+    load_reviewed_apply_policy,
+    merge_reviewed_apply_policy,
+)
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -451,13 +456,78 @@ class ForgeCLI:
     def milestone_apply_plan(
         plan_id: str,
         json_mode: bool = False,
-        gate_validate: bool = False,
+        gate_validate: bool | None = None,
         gate_test_cmd: str | None = None,
+        disable_gate_test_cmd: bool = False,
+        gate_test_timeout_seconds: int | None = None,
+        gate_test_output_max_chars: int | None = None,
     ) -> bool:
+        base_policy, policy_err = load_reviewed_apply_policy()
+        if policy_err:
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {
+                                "ok": False,
+                                "plan_id": plan_id,
+                                "message": policy_err,
+                                "errors": [policy_err],
+                            }
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(policy_err)
+            return False
+
+        resolved_policy: ReviewedApplyPolicy = merge_reviewed_apply_policy(
+            base_policy,
+            gate_validate=gate_validate,
+            test_command=gate_test_cmd,
+            disable_test_command=disable_gate_test_cmd,
+            test_timeout_seconds=gate_test_timeout_seconds,
+            test_output_max_chars=gate_test_output_max_chars,
+        )
+        if resolved_policy.test_timeout_seconds <= 0:
+            msg = "Invalid gate configuration: test timeout must be a positive integer."
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {"ok": False, "plan_id": plan_id, "message": msg, "errors": [msg]}
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(msg)
+            return False
+        if resolved_policy.test_output_max_chars <= 0:
+            msg = "Invalid gate configuration: test output max chars must be a positive integer."
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {"ok": False, "plan_id": plan_id, "message": msg, "errors": [msg]}
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(msg)
+            return False
+
         result = Executor.apply_reviewed_plan_with_gates(
             plan_id,
-            run_validation_gate=gate_validate,
-            test_command=gate_test_cmd,
+            run_validation_gate=resolved_policy.run_validation_gate,
+            test_command=resolved_policy.test_command,
+            test_timeout_seconds=resolved_policy.test_timeout_seconds,
+            test_output_max_chars=resolved_policy.test_output_max_chars,
         )
         if json_mode:
             print(json.dumps(serialize_apply_plan_result(result), indent=2, sort_keys=True))
@@ -525,15 +595,36 @@ def main() -> int:
         "milestone-apply-plan", help="Apply a previously reviewed milestone plan"
     )
     milestone_apply_plan_parser.add_argument("plan_id", type=str, help="Reviewed plan ID")
-    milestone_apply_plan_parser.add_argument(
+    gate_validate_group = milestone_apply_plan_parser.add_mutually_exclusive_group()
+    gate_validate_group.add_argument(
         "--gate-validate",
         action="store_true",
         help="Run milestone validation gate after apply",
+    )
+    gate_validate_group.add_argument(
+        "--no-gate-validate",
+        action="store_true",
+        help="Disable milestone validation gate for this apply",
     )
     milestone_apply_plan_parser.add_argument(
         "--gate-test-cmd",
         type=str,
         help="Run explicit repository test command gate after apply",
+    )
+    milestone_apply_plan_parser.add_argument(
+        "--no-gate-test-cmd",
+        action="store_true",
+        help="Disable configured repository test command gate for this apply",
+    )
+    milestone_apply_plan_parser.add_argument(
+        "--gate-test-timeout-seconds",
+        type=int,
+        help="Override timeout seconds for repository test command gate",
+    )
+    milestone_apply_plan_parser.add_argument(
+        "--gate-test-output-max-chars",
+        type=int,
+        help="Override captured output size for repository test command gate",
     )
     milestone_apply_plan_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
@@ -587,11 +678,21 @@ def main() -> int:
     elif args.command == "milestone-preview":
         ForgeCLI.milestone_preview(args.id, json_mode=args.json, save_plan=args.save_plan)
     elif args.command == "milestone-apply-plan":
+        gate_validate_override = (
+            True
+            if args.gate_validate
+            else False
+            if args.no_gate_validate
+            else None
+        )
         return 0 if ForgeCLI.milestone_apply_plan(
             args.plan_id,
             json_mode=args.json,
-            gate_validate=args.gate_validate,
+            gate_validate=gate_validate_override,
             gate_test_cmd=args.gate_test_cmd,
+            disable_gate_test_cmd=args.no_gate_test_cmd,
+            gate_test_timeout_seconds=args.gate_test_timeout_seconds,
+            gate_test_output_max_chars=args.gate_test_output_max_chars,
         ) else 1
     elif args.command == "milestone-lint":
         return 0 if ForgeCLI.milestone_lint(args.id, json_mode=args.json) else 1
