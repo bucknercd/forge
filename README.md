@@ -91,7 +91,7 @@ Edit `docs/milestones.md`. Each milestone should use a heading like:
 Supported action verbs (first token): `append_section`, `replace_section`, `add_decision`, `mark_milestone_completed`.  
 Targets: `requirements`, `architecture`, `decisions`, `milestones` (mapped to files under `docs/`).
 
-Results are written to `.system/results/milestone_<id>.json` (`execution_plan`, `files_changed`, `actions_applied`). Successful runs also append a summary entry to `docs/decisions.md` unless the plan includes `add_decision`.
+Results are written to `.system/results/milestone_<id>.json`, including `execution_plan`, `files_changed`, `artifact_summary`, and per-action records in `actions_applied` (`outcome`: `changed` | `skipped` | `failed`, optional bounded `diff` unified text when a file actually changes). Structured JSONL in `.system/run_history.log` may include `artifact_summary` on milestone attempts for a quick read of what changed. Successful runs also append a summary entry to `docs/decisions.md` unless the plan includes `add_decision`.
 
 #### Authoring tips and diagnostics
 

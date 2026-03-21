@@ -176,17 +176,15 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add diff-aware execution reporting for milestone runs.
+Add dry-run execution preview for milestones.
 
-- capture before/after content for changed artifacts
-- record per-action outcomes:
-  - changed
-  - skipped as idempotent
-  - failed
-- include concise diffs in execution results
-- improve run history with a summary of artifact changes
-- keep reporting deterministic and file-based
-- avoid storing full file contents when a concise diff is enough
+- implement a dry-run mode that builds the execution plan without mutating files
+- show which actions would run and which artifacts would be targeted
+- include predicted per-action outcomes where possible
+- generate preview diffs for file-backed actions without writing changes
+- keep preview deterministic and file-based
+- support previewing a single milestone and the next selected milestone
+- preserve existing execution, retry, and run-history behavior for real runs
 
 Goal:
-Make milestone execution easy to inspect, review, and debug after a run.
+Allow users to inspect planned artifact changes before applying them.

@@ -30,6 +30,7 @@ class Validator:
             "id",
             "title",
             "summary",
+            "artifact_summary",
             "files_changed",
             "actions_applied",
             "execution_plan",

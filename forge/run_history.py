@@ -30,6 +30,7 @@ class RunHistory:
         milestone_title: str,
         status: str,
         error_message: str | None = None,
+        artifact_summary: str | None = None,
         timestamp: datetime | None = None,
     ) -> None:
         """
@@ -50,6 +51,8 @@ class RunHistory:
         }
         if error_message:
             log_entry["error_message"] = error_message
+        if artifact_summary:
+            log_entry["artifact_summary"] = artifact_summary
 
         FileRepository.append_to_file(Paths.RUN_HISTORY_FILE, json.dumps(log_entry))
 

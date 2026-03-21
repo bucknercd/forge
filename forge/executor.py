@@ -10,7 +10,7 @@ from forge.milestone_state import normalize_milestone_state_value
 from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
 
-from forge.execution.models import ActionAddDecision, ExecutionPlan
+from forge.execution.models import ActionAddDecision, ApplyResult, ExecutionPlan
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.apply import ArtifactActionApplier
 
@@ -21,9 +21,13 @@ def _plan_has_add_decision(plan: ExecutionPlan) -> bool:
     return any(isinstance(a, ActionAddDecision) for a in plan.actions)
 
 
-def _build_summary(applied_files: list[str], action_count: int) -> str:
-    files = ", ".join(applied_files) if applied_files else "(no file writes)"
-    return f"Applied {action_count} action(s). Updated: {files}"
+def _build_execution_summary(
+    planned_action_count: int, apply_result: ApplyResult
+) -> str:
+    return (
+        f"Applied {planned_action_count} planned action(s). "
+        f"{apply_result.human_summary()}"
+    )
 
 
 class Executor:
@@ -176,12 +180,13 @@ class Executor:
         apply_result = applier.apply(plan, milestone)
 
         files_norm = apply_result.normalized_files_changed()
-        summary = _build_summary(files_norm, len(plan.actions))
+        summary = _build_execution_summary(len(plan.actions), apply_result)
 
         result_payload: dict = {
             "id": milestone_id,
             "title": milestone.title,
             "summary": summary,
+            "artifact_summary": apply_result.human_summary(),
             "files_changed": files_norm,
             "actions_applied": apply_result.actions_applied,
             "execution_plan": plan.to_serializable(),
@@ -218,6 +223,7 @@ class Executor:
                 milestone_id=milestone_id,
                 milestone_title=milestone.title,
                 status="success",
+                artifact_summary=apply_result.human_summary(),
             )
         else:
             if milestone_state["attempts"] < MAX_RETRIES:
@@ -249,6 +255,9 @@ class Executor:
                 milestone_title=milestone.title,
                 status="failure",
                 error_message=reason,
+                artifact_summary=apply_result.human_summary()
+                if apply_result.actions_applied
+                else None,
             )
 
         # Persist updated state
@@ -267,6 +276,7 @@ class Executor:
             "id": milestone_id,
             "title": milestone.title,
             "summary": "",
+            "artifact_summary": "",
             "files_changed": [],
             "actions_applied": [],
             "execution_plan": {},

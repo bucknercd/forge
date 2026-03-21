@@ -91,3 +91,24 @@ class ApplyResult:
 
     def normalized_files_changed(self) -> list[str]:
         return sorted({str(p) for p in self.files_changed})
+
+    def human_summary(self) -> str:
+        """One-line summary of per-action outcomes and touched artifact paths."""
+        if not self.actions_applied:
+            return "No actions recorded."
+        counts: dict[str, int] = {"changed": 0, "skipped": 0, "failed": 0}
+        paths: list[str] = []
+        for a in self.actions_applied:
+            o = a.get("outcome", "unknown")
+            if o in counts:
+                counts[o] += 1
+            if o == "changed" and a.get("path"):
+                paths.append(str(a["path"]))
+        uniq = sorted(set(paths))
+        path_part = ", ".join(uniq) if uniq else "—"
+        failed = counts["failed"]
+        fail_part = f", {failed} failed" if failed else ""
+        return (
+            f"{counts['changed']} changed, {counts['skipped']} skipped{fail_part}; "
+            f"artifacts: {path_part}"
+        )
