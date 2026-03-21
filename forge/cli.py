@@ -461,8 +461,18 @@ class ForgeCLI:
         print(
             f"Preview Milestone: {result['milestone_id']}. {result.get('title', '')}"
         )
+        pmeta = result.get("planner_metadata", {}) or {}
+        planner_line = f"Planner: {result.get('planner_mode', 'deterministic')}"
+        if pmeta.get("llm_client"):
+            planner_line += f" ({pmeta.get('llm_client')}"
+            if pmeta.get("llm_model"):
+                planner_line += f":{pmeta.get('llm_model')}"
+            planner_line += ")"
+        print(planner_line)
         if result.get("plan_id"):
             print(f"Reviewed Plan ID: {result['plan_id']}")
+        for w in result.get("warnings", []):
+            print(f"Warning: {w}")
         print(f"Artifact Summary: {result.get('artifact_summary', '')}")
         files = result.get("files_changed", [])
         print("Targeted Artifacts:")
@@ -572,6 +582,16 @@ class ForgeCLI:
             return False
         print(f"Applied reviewed plan: {result.get('plan_id')}")
         print(f"Milestone: {result.get('milestone_id')}. {result.get('title', '')}")
+        pmeta = result.get("planner_metadata", {}) or {}
+        planner_line = f"Planner: {result.get('planner_mode', 'deterministic')}"
+        if pmeta.get("llm_client"):
+            planner_line += f" ({pmeta.get('llm_client')}"
+            if pmeta.get("llm_model"):
+                planner_line += f":{pmeta.get('llm_model')}"
+            planner_line += ")"
+        print(planner_line)
+        for w in result.get("warnings", []):
+            print(f"Warning: {w}")
         print(f"Artifact Summary: {result.get('artifact_summary', '')}")
         if result.get("gate_summary"):
             print(f"Gates: {result.get('gate_summary')}")

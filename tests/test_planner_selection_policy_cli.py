@@ -82,3 +82,16 @@ def test_save_plan_json_includes_planner_mode(tmp_path, monkeypatch, capsys):
     assert payload["ok"] is True
     assert payload["planner_mode"] == "deterministic"
     assert payload["plan_id"]
+
+
+def test_cli_human_preview_shows_llm_provenance_warning(tmp_path, monkeypatch, capsys):
+    _bootstrap(tmp_path, monkeypatch, capsys)
+    (tmp_path / "forge-policy.json").write_text(
+        json.dumps({"planner": {"mode": "llm", "llm_client": "stub"}}, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1"])
+    assert main() == 0
+    out = capsys.readouterr().out
+    assert "Planner: llm (stub)" in out
+    assert "Warning:" in out

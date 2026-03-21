@@ -59,7 +59,12 @@ def target_paths_for_plan(plan: ExecutionPlan) -> list[Path]:
 
 
 def save_reviewed_plan(
-    milestone_id: int, milestone_title: str, plan: ExecutionPlan, planner_mode: str = "deterministic"
+    milestone_id: int,
+    milestone_title: str,
+    plan: ExecutionPlan,
+    planner_mode: str = "deterministic",
+    planner_metadata: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     reviewed_plan_dir().mkdir(parents=True, exist_ok=True)
     p_hash = plan_hash(plan)
@@ -78,6 +83,8 @@ def save_reviewed_plan(
         "milestone_id": milestone_id,
         "milestone_title": milestone_title,
         "planner_mode": planner_mode,
+        "planner_metadata": planner_metadata or {"mode": planner_mode},
+        "warnings": list(warnings or []),
         "created_at": datetime.now().isoformat(),
         "plan_hash": p_hash,
         "milestones_file_hash": _file_hash(Paths.MILESTONES_FILE),

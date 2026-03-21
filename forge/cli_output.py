@@ -32,6 +32,7 @@ def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
         "plan_id": payload.get("plan_id"),
         "plan_file": payload.get("plan_file"),
         "planner_mode": payload.get("planner_mode", "deterministic"),
+        "planner_metadata": payload.get("planner_metadata", {}),
         "milestone_id": payload.get("milestone_id"),
         "title": payload.get("title"),
         "message": payload.get("message", ""),
@@ -39,6 +40,7 @@ def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
         "targeted_artifacts": payload.get("files_changed", []),
         "planned_actions": payload.get("execution_plan", {}).get("actions", []),
         "actions_applied": payload.get("actions_applied", []),
+        "warnings": payload.get("warnings", []),
         "errors": payload.get("errors", []),
         "summary_counts": _summary_counts(payload.get("actions_applied", [])),
     }
@@ -52,6 +54,7 @@ def serialize_apply_plan_result(payload: dict[str, Any]) -> dict[str, Any]:
         "gates_ok": bool(payload.get("gates_ok", True)),
         "plan_id": payload.get("plan_id"),
         "planner_mode": payload.get("planner_mode", "deterministic"),
+        "planner_metadata": payload.get("planner_metadata", {}),
         "milestone_id": payload.get("milestone_id"),
         "title": payload.get("title"),
         "message": payload.get("message", ""),
@@ -62,6 +65,7 @@ def serialize_apply_plan_result(payload: dict[str, Any]) -> dict[str, Any]:
         "result_artifact": payload.get("result_artifact"),
         "targeted_artifacts": payload.get("files_changed", []),
         "actions_applied": payload.get("actions_applied", []),
+        "warnings": payload.get("warnings", []),
         "errors": payload.get("errors", []),
         "summary_counts": _summary_counts(payload.get("actions_applied", [])),
     }

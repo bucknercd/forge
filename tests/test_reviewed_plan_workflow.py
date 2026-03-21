@@ -22,11 +22,18 @@ def test_preview_save_plan_and_apply_success(tmp_path):
     preview = Executor.save_reviewed_plan_for_milestone(1)
     assert preview["ok"] is True
     assert preview.get("plan_id")
+    assert preview["planner_metadata"]["mode"] == "deterministic"
     plan_id = preview["plan_id"]
     assert (Paths.SYSTEM_DIR / "reviewed_plans" / f"{plan_id}.json").exists()
+    plan_payload = json.loads(
+        (Paths.SYSTEM_DIR / "reviewed_plans" / f"{plan_id}.json").read_text(encoding="utf-8")
+    )
+    assert plan_payload["planner_metadata"]["mode"] == "deterministic"
+    assert isinstance(plan_payload.get("warnings"), list)
 
     apply_res = Executor.apply_reviewed_plan(plan_id)
     assert apply_res["ok"] is True
+    assert apply_res["planner_metadata"]["mode"] == "deterministic"
     assert "REVIEWED_OK" in Paths.REQUIREMENTS_FILE.read_text(encoding="utf-8")
 
 
@@ -105,6 +112,8 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
     assert main() == 0
     preview_payload = json.loads(capsys.readouterr().out)
     assert preview_payload["ok"] is True
+    assert "planner_metadata" in preview_payload
+    assert "warnings" in preview_payload
     plan_id = preview_payload["plan_id"]
 
     monkeypatch.setattr("sys.argv", ["forge", "milestone-apply-plan", plan_id, "--json"])
@@ -112,6 +121,8 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
     apply_payload = json.loads(capsys.readouterr().out)
     assert apply_payload["ok"] is True
     assert apply_payload["plan_id"] == plan_id
+    assert "planner_metadata" in apply_payload
+    assert "warnings" in apply_payload
 
 
 def test_apply_reviewed_plan_with_validation_gate_fail(tmp_path):

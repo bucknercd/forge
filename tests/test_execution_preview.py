@@ -129,6 +129,8 @@ def test_cli_milestone_preview_json_mode(tmp_path, monkeypatch, capsys):
     assert payload["targeted_artifacts"]
     assert payload["planned_actions"]
     assert payload["actions_applied"]
+    assert "planner_metadata" in payload
+    assert "warnings" in payload
     assert "summary_counts" in payload
     assert "changed" in payload["summary_counts"]
 

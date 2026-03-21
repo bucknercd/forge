@@ -17,6 +17,14 @@ class Planner:
     def build_plan(self, milestone: Milestone) -> ExecutionPlan:
         raise NotImplementedError
 
+    def metadata(self) -> dict:
+        return {
+            "mode": self.mode,
+            "is_nondeterministic": not bool(self.stable_for_recheck),
+            "llm_client": None,
+            "llm_model": None,
+        }
+
 
 class DeterministicPlanner(Planner):
     mode = "deterministic"
@@ -72,3 +80,11 @@ class LLMPlanner(Planner):
             except ValueError as exc:
                 raise ValueError(f"LLM planner action {idx} invalid: {exc}") from exc
         return ExecutionPlan(milestone_id=milestone.id, actions=actions)
+
+    def metadata(self) -> dict:
+        return {
+            "mode": self.mode,
+            "is_nondeterministic": True,
+            "llm_client": getattr(self.llm_client, "client_id", "unknown"),
+            "llm_model": getattr(self.llm_client, "model_name", None),
+        }

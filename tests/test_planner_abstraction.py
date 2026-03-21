@@ -115,9 +115,38 @@ def test_llm_generated_plan_flows_through_reviewed_save_and_apply(tmp_path):
     preview = Executor.save_reviewed_plan_for_milestone(1, planner=planner)
     assert preview["ok"] is True
     assert preview["planner_mode"] == "llm"
+    assert preview["planner_metadata"]["is_nondeterministic"] is True
+    assert preview["planner_metadata"]["llm_client"] == "unknown"
+    assert preview["warnings"]
     plan_id = preview["plan_id"]
 
     applied = Executor.apply_reviewed_plan(plan_id)
     assert applied["ok"] is True
     assert applied["planner_mode"] == "llm"
+    assert applied["planner_metadata"]["is_nondeterministic"] is True
+    assert applied["warnings"]
     assert "LLM_FLOW_OK" in Paths.REQUIREMENTS_FILE.read_text(encoding="utf-8")
+
+
+def test_llm_preview_warns_for_suspicious_duplicate_heavy_plan(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: LLM Suspicious
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+""",
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    many = ["append_section requirements Overview | DUP"] * 13 + ["mark_milestone_completed"]
+    planner = LLMPlanner(FakeLLM(json.dumps({"actions": many})))
+    preview = Executor.preview_milestone(1, planner=planner)
+    assert preview["ok"] is True
+    text = " ".join(preview.get("warnings", []))
+    assert "non-deterministic" in text
+    assert "high action count" in text
+    assert "duplicate" in text

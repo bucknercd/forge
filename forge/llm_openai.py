@@ -101,6 +101,14 @@ class OpenAIChatClient(LLMClient):
             )
         return parse_chat_completions_response(raw)
 
+    @property
+    def client_id(self) -> str:
+        return "openai"
+
+    @property
+    def model_name(self) -> str | None:
+        return self._model
+
 
 def _default_http_post(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
