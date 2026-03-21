@@ -26,6 +26,8 @@ class Milestone:
         depends_on: List[int] | None = None,
         forge_actions: List[str] | None = None,
         forge_validation: List[str] | None = None,
+        forge_actions_with_lines: List[tuple[int, str]] | None = None,
+        forge_validation_with_lines: List[tuple[int, str]] | None = None,
     ):
         self.id = id
         self.title = title
@@ -35,6 +37,8 @@ class Milestone:
         self.depends_on = depends_on or []
         self.forge_actions = forge_actions or []
         self.forge_validation = forge_validation or []
+        self.forge_actions_with_lines = forge_actions_with_lines or []
+        self.forge_validation_with_lines = forge_validation_with_lines or []
 
     def __str__(self):
         return (
@@ -98,21 +102,35 @@ class MilestoneService:
 
         MilestoneService._validate_milestones(milestones)
         for m in milestones:
-            block = MilestoneService._milestone_block(content, m.id)
-            m.forge_actions = MilestoneService._parse_forge_list(block, "Forge Actions")
-            m.forge_validation = MilestoneService._parse_forge_list(block, "Forge Validation")
+            block, start_line = MilestoneService._milestone_block(content, m.id)
+            m.forge_actions_with_lines = MilestoneService._parse_forge_list(
+                block, "Forge Actions", block_start_line=start_line, milestone_id=m.id
+            )
+            m.forge_validation_with_lines = MilestoneService._parse_forge_list(
+                block, "Forge Validation", block_start_line=start_line, milestone_id=m.id
+            )
+            m.forge_actions = [text for _, text in m.forge_actions_with_lines]
+            m.forge_validation = [text for _, text in m.forge_validation_with_lines]
         return milestones
 
     @staticmethod
-    def _milestone_block(content: str, milestone_id: int) -> str:
+    def _milestone_block(content: str, milestone_id: int) -> tuple[str, int]:
         pattern = re.compile(
             rf"(?ms)^##\s+Milestone\s+{milestone_id}\s*:\s*.+?(?=^##\s+Milestone\s+\d+|\Z)"
         )
         m = pattern.search(content)
-        return m.group(0) if m else ""
+        if not m:
+            return "", 1
+        start_line = content[: m.start()].count("\n") + 1
+        return m.group(0), start_line
 
     @staticmethod
-    def _parse_forge_list(block: str, field: str) -> List[str]:
+    def _parse_forge_list(
+        block: str,
+        field: str,
+        block_start_line: int,
+        milestone_id: int,
+    ) -> List[tuple[int, str]]:
         if not block:
             return []
         needle = f"- **{field}**:"
@@ -120,13 +138,28 @@ class MilestoneService:
         if idx == -1:
             return []
         rest = block[idx + len(needle) :]
-        lines: List[str] = []
-        for line in rest.splitlines():
+        header_line = block_start_line + block[:idx].count("\n")
+        lines: List[tuple[int, str]] = []
+        saw_non_empty = False
+        for i, line in enumerate(rest.splitlines(), start=1):
+            line_no = header_line + i
             stripped = line.strip()
             if stripped.startswith("- **"):
                 break
+            if stripped:
+                saw_non_empty = True
             if stripped.startswith("- ") and not stripped.startswith("- **"):
-                lines.append(stripped[2:].strip())
+                lines.append((line_no, stripped[2:].strip()))
+            elif stripped and not stripped.startswith("- "):
+                raise ValueError(
+                    f"Milestone {milestone_id} malformed {field} at line {line_no}: "
+                    "expected list item starting with '- '."
+                )
+        if saw_non_empty and not lines:
+            raise ValueError(
+                f"Milestone {milestone_id} malformed {field} near line {header_line}: "
+                "no valid list items found."
+            )
         return lines
 
     @staticmethod

@@ -93,6 +93,27 @@ Targets: `requirements`, `architecture`, `decisions`, `milestones` (mapped to fi
 
 Results are written to `.system/results/milestone_<id>.json` (`execution_plan`, `files_changed`, `actions_applied`). Successful runs also append a summary entry to `docs/decisions.md` unless the plan includes `add_decision`.
 
+#### Authoring tips and diagnostics
+
+- Use indented list items under `Forge Actions` / `Forge Validation` (`  - ...`).
+- Keep action format strict: `append_section <target> <Section Heading> | <body>`.
+- Keep validation format strict: `file_contains <target> <substring>` or `section_contains <target> <Section Heading> <substring>`.
+- Diagnostics now include milestone + source line when parsing fails (for example: `Milestone 3 action parse error: forge action line 42: ...`).
+
+Example (valid):
+
+```markdown
+## Milestone 2: Capture API requirements
+- **Objective**: Add API requirements section.
+- **Scope**: Update requirements and mark completion.
+- **Validation**: Ensure API text exists.
+- **Forge Actions**:
+  - append_section requirements API | - Define REST endpoints for v1.
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements Define REST endpoints for v1.
+```
+
 ### Common commands
 
 ```bash

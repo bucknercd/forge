@@ -176,40 +176,14 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Implement a real execution engine for Forge.
+Add a milestone lint command for pre-execution validation.
+
+- implement `forge milestone-lint`
+- run milestone parsing and Forge Actions / Validation parsing without executing
+- reuse existing line-aware diagnostics
+- output clear, actionable errors with milestone id and line numbers
+- fail fast on malformed definitions
+- support validating a single milestone or all milestones
 
 Goal:
-Replace placeholder milestone execution with a concrete artifact-driven execution flow.
-
-Requirements:
-- Executor should translate a milestone into explicit actions
-- Actions should target real design artifacts:
-  - docs/requirements.md
-  - docs/architecture.md
-  - docs/decisions.md
-  - docs/milestones.md
-- Execution should produce a structured plan before applying changes
-- Execution should persist a structured result after applying changes
-- Validation should check whether intended artifact changes actually occurred
-- Run history should record:
-  - selected milestone
-  - planned actions
-  - files changed
-  - validation outcome
-  - final state transition
-
-Initial scope:
-- Keep execution deterministic and file-based
-- Start with a small action model, for example:
-  - append_section
-  - replace_section
-  - add_decision
-  - mark_milestone_completed
-- Do not add LLM orchestration yet
-- Do not add databases, queues, or external services
-
-Definition of done:
-- A milestone execution changes real project documents
-- Validation verifies the expected document updates
-- Run history captures full execution details
-- Tests cover unit + integration behavior for real execution
+Allow users to validate milestone correctness before running execution.

@@ -12,14 +12,19 @@ class Validator:
         result_file = Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json"
 
         if not result_file.exists():
-            return False, "Missing result file."
+            return False, (
+                f"Milestone {milestone_id} has no execution result file at "
+                f"{result_file}. Run execution first."
+            )
 
         with result_file.open("r", encoding="utf-8") as file:
             result = json.load(file)
 
         apply_errors = result.get("apply_errors") or []
         if apply_errors:
-            return False, f"Apply errors: {'; '.join(apply_errors)}"
+            return False, (
+                f"Milestone {milestone_id} apply step failed: {'; '.join(apply_errors)}"
+            )
 
         required_fields = [
             "id",
@@ -31,14 +36,17 @@ class Validator:
         ]
         missing = [field for field in required_fields if field not in result]
         if missing:
-            return False, f"Result missing required fields: {', '.join(missing)}"
+            return False, (
+                f"Milestone {milestone_id} result missing required fields: "
+                f"{', '.join(missing)}"
+            )
 
         if not str(result.get("summary", "")).strip():
-            return False, "Result summary is empty."
+            return False, f"Milestone {milestone_id} result summary is empty."
 
         milestone = MilestoneService.get_milestone(milestone_id)
         if not milestone:
-            return False, "Milestone not found during validation."
+            return False, f"Milestone {milestone_id} not found during validation."
 
         if (
             not milestone.objective.strip()
@@ -46,21 +54,25 @@ class Validator:
             or not milestone.validation.strip()
         ):
             return False, (
-                "Milestone objective/scope/validation fields must be non-empty."
+                f"Milestone {milestone_id} objective/scope/validation fields "
+                "must be non-empty."
             )
 
         if not milestone.forge_actions:
-            return False, "No Forge Actions defined for this milestone."
+            return False, (
+                f"Milestone {milestone_id} has no Forge Actions. "
+                "Add a '- **Forge Actions**:' block with deterministic actions."
+            )
 
         if milestone.forge_actions and not milestone.forge_validation:
             return False, (
-                "Forge Validation rules are required when Forge Actions are defined."
+                f"Milestone {milestone_id} has Forge Actions but no Forge Validation rules."
             )
 
         try:
             rules = ExecutionPlanBuilder.parse_validation_rules(milestone)
         except ValueError as exc:
-            return False, f"Invalid forge validation rules: {exc}"
+            return False, f"Invalid Forge Validation for milestone {milestone_id}: {exc}"
 
         ok, reason = validate_all_rules(rules, Paths)
         if not ok:

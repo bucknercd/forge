@@ -12,16 +12,30 @@ class ExecutionPlanBuilder:
     @staticmethod
     def build(milestone: Milestone) -> ExecutionPlan:
         actions: list[ForgeAction] = []
-        for raw in milestone.forge_actions:
-            actions.append(parse_forge_action_line(raw, milestone))
+        source = milestone.forge_actions_with_lines or [(0, raw) for raw in milestone.forge_actions]
+        for line_no, raw in source:
+            try:
+                actions.append(parse_forge_action_line(raw, milestone, line_no=line_no or None))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Milestone {milestone.id} action parse error: {exc}"
+                ) from exc
         actions = ExecutionPlanBuilder._ensure_mark_completed_last(actions)
         return ExecutionPlan(milestone_id=milestone.id, actions=actions)
 
     @staticmethod
     def parse_validation_rules(milestone: Milestone) -> list[ForgeValidationRule]:
         rules: list[ForgeValidationRule] = []
-        for raw in milestone.forge_validation:
-            rules.append(parse_forge_validation_line(raw))
+        source = milestone.forge_validation_with_lines or [
+            (0, raw) for raw in milestone.forge_validation
+        ]
+        for line_no, raw in source:
+            try:
+                rules.append(parse_forge_validation_line(raw, line_no=line_no or None))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Milestone {milestone.id} validation parse error: {exc}"
+                ) from exc
         return rules
 
     @staticmethod

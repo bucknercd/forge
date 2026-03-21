@@ -15,17 +15,25 @@ from forge.execution.validation_rules import ForgeValidationRule, RuleFileContai
 TARGETS = frozenset({"requirements", "architecture", "decisions", "milestones"})
 
 
-def _parse_target(tok: str) -> str:
+def _parse_target(tok: str, line_no: int | None = None, kind: str = "forge item") -> str:
     t = tok.strip().lower()
     if t not in TARGETS:
-        raise ValueError(f"Unknown document target '{tok}'. Expected one of {sorted(TARGETS)}.")
+        raise ValueError(
+            _fmt_diag(
+                kind,
+                f"Unknown document target {tok!r}. Expected one of {sorted(TARGETS)}.",
+                line_no,
+            )
+        )
     return t
 
 
-def parse_forge_action_line(raw: str, milestone: Milestone) -> ForgeAction:
+def parse_forge_action_line(
+    raw: str, milestone: Milestone, line_no: int | None = None
+) -> ForgeAction:
     line = raw.strip()
     if not line:
-        raise ValueError("Empty forge action line.")
+        raise ValueError(_fmt_diag("forge action", "Empty line.", line_no))
 
     if line == "mark_milestone_completed":
         return ActionMarkMilestoneCompleted()
@@ -36,19 +44,25 @@ def parse_forge_action_line(raw: str, milestone: Milestone) -> ForgeAction:
 
     if " | " not in line:
         raise ValueError(
-            f"Invalid forge action (expected 'cmd ... | body' or known keyword): {raw!r}"
+            _fmt_diag(
+                "forge action",
+                f"Invalid format (expected 'cmd ... | body' or known keyword): {raw!r}",
+                line_no,
+            )
         )
 
     left, body = line.split(" | ", 1)
     parts = left.split()
     if len(parts) < 3:
-        raise ValueError(f"Invalid forge action: {raw!r}")
+        raise ValueError(_fmt_diag("forge action", f"Invalid action: {raw!r}", line_no))
 
     cmd = parts[0].lower()
-    target = _parse_target(parts[1])
+    target = _parse_target(parts[1], line_no=line_no, kind="forge action")
     section_heading = " ".join(parts[2:]).strip()
     if not section_heading:
-        raise ValueError(f"Missing section heading in forge action: {raw!r}")
+        raise ValueError(
+            _fmt_diag("forge action", f"Missing section heading: {raw!r}", line_no)
+        )
 
     if cmd == "append_section":
         return ActionAppendSection(
@@ -63,7 +77,9 @@ def parse_forge_action_line(raw: str, milestone: Milestone) -> ForgeAction:
             body=body,
         )
 
-    raise ValueError(f"Unknown forge action command: {parts[0]!r}")
+    raise ValueError(
+        _fmt_diag("forge action", f"Unknown command {parts[0]!r}", line_no)
+    )
 
 
 def _parse_add_decision(line: str, milestone: Milestone) -> ActionAddDecision:
@@ -103,22 +119,28 @@ def _parse_add_decision(line: str, milestone: Milestone) -> ActionAddDecision:
     )
 
 
-def parse_forge_validation_line(raw: str) -> ForgeValidationRule:
+def parse_forge_validation_line(raw: str, line_no: int | None = None) -> ForgeValidationRule:
     line = raw.strip()
     if not line:
-        raise ValueError("Empty forge validation line.")
+        raise ValueError(_fmt_diag("forge validation", "Empty line.", line_no))
 
     parts = line.split()
     if len(parts) < 2:
-        raise ValueError(f"Invalid forge validation rule: {raw!r}")
+        raise ValueError(
+            _fmt_diag("forge validation", f"Invalid validation rule: {raw!r}", line_no)
+        )
 
     kind = parts[0].lower()
-    target = _parse_target(parts[1])
+    target = _parse_target(parts[1], line_no=line_no, kind="forge validation")
 
     if kind == "file_contains":
         if len(parts) < 3:
             raise ValueError(
-                f"file_contains needs: file_contains <target> <substring>: {raw!r}"
+                _fmt_diag(
+                    "forge validation",
+                    f"file_contains expects: file_contains <target> <substring>: {raw!r}",
+                    line_no,
+                )
             )
         substring = line.split(maxsplit=2)[2]
         return RuleFileContains(target=target, substring=substring)  # type: ignore[arg-type]
@@ -126,7 +148,14 @@ def parse_forge_validation_line(raw: str) -> ForgeValidationRule:
     if kind == "section_contains":
         if len(parts) < 4:
             raise ValueError(
-                f"section_contains needs: section_contains <target> <section> <substring>: {raw!r}"
+                _fmt_diag(
+                    "forge validation",
+                    (
+                        "section_contains expects: section_contains <target> "
+                        f"<section> <substring>: {raw!r}"
+                    ),
+                    line_no,
+                )
             )
         section_heading = parts[2]
         substring = line.split(maxsplit=3)[3]
@@ -136,4 +165,12 @@ def parse_forge_validation_line(raw: str) -> ForgeValidationRule:
             substring=substring,
         )
 
-    raise ValueError(f"Unknown forge validation kind: {kind!r}")
+    raise ValueError(
+        _fmt_diag("forge validation", f"Unknown validation kind {kind!r}", line_no)
+    )
+
+
+def _fmt_diag(kind: str, message: str, line_no: int | None) -> str:
+    if line_no is None:
+        return f"{kind}: {message}"
+    return f"{kind} line {line_no}: {message}"
