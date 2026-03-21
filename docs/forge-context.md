@@ -232,12 +232,20 @@ Forge Actions can perform **minimal bounded edits** on allowed repo paths (`exam
 - **Zero or multiple** non-overlapping matches → safe failure (no partial writes)
 - **`write_file`** remains for bootstrapping / full-file cases
 
+#### Bounded edits — phase 1 extensions
+Practical, code-oriented bounded editing (still stdlib-only, no AST):
+
+- **Matching**: optional `occurrence=N`, `must_be_unique=false`, `line_match=true` (full-line equality); default remains unique-or-fail
+- **Lines**: `replace_lines_in_file` with inclusive 1-based `start_line`/`end_line`; invalid ranges fail safely
+- **Newlines**: normalized to `\n` for matching and writes from bounded edits
+- **Diffs**: unified diff with context lines + `# forge-action:` header tying output to the action
+
 ### Active TODO
 
-1. Extend bounded edits and reduce `write_file` usage
-   - richer edit primitives (e.g. line-anchored, patch-style) where reviewability wins
-   - optional policy limits (per-run file touch counts, path classes)
-   - apply the same event + run-log patterns to `milestone-apply-plan` / workflow paths
+1. Policy and orchestration polish
+   - optional limits (per-run file touches, path classes) and stricter review defaults where needed
+   - reuse run-event + JSONL patterns on `milestone-apply-plan` / workflow paths
+   - further reduce reliance on `write_file` for incremental milestones
 
 ### Next TODOs (Stabilization Phase)
 

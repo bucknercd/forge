@@ -9,10 +9,13 @@ from typing import Any
 from forge.decision_tracker import DecisionTracker
 from forge.design_manager import DesignManager, Milestone
 from forge.execution.file_edits import (
+    BoundedMatchOptions,
     apply_insert_after,
     apply_insert_before,
     apply_replace_block,
+    apply_replace_lines,
     apply_replace_text,
+    normalize_newlines,
 )
 from forge.execution.models import (
     ActionAddDecision,
@@ -21,6 +24,7 @@ from forge.execution.models import (
     ActionInsertBeforeInFile,
     ActionMarkMilestoneCompleted,
     ActionReplaceBlockInFile,
+    ActionReplaceLinesInFile,
     ActionReplaceSection,
     ActionReplaceTextInFile,
     ActionWriteFile,
@@ -57,6 +61,8 @@ def _action_type_name(action: Any) -> str:
         return "replace_text_in_file"
     if isinstance(action, ActionReplaceBlockInFile):
         return "replace_block_in_file"
+    if isinstance(action, ActionReplaceLinesInFile):
+        return "replace_lines_in_file"
     return type(action).__name__
 
 
@@ -84,7 +90,7 @@ class ArtifactActionApplier:
     def _read_bounded_file(self, path: Path) -> str:
         if not path.exists():
             raise ValueError(f"bounded file action: file not found ({self._rel(path)})")
-        return path.read_text(encoding="utf-8")
+        return normalize_newlines(path.read_text(encoding="utf-8"))
 
     def _apply_bounded_text_edit(
         self,
@@ -97,12 +103,13 @@ class ArtifactActionApplier:
         dry_run: bool,
         event_bus: Any,
         extra: dict[str, Any],
+        diff_hint: str | None = None,
     ) -> None:
         changed = before != after
         if changed:
             if not dry_run:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(after, encoding="utf-8")
+                path.write_text(normalize_newlines(after), encoding="utf-8")
             result.files_changed.append(path)
         self._append_file_record(
             result,
@@ -113,6 +120,7 @@ class ArtifactActionApplier:
             changed=changed,
             extra=extra,
             event_bus=event_bus,
+            diff_hint=diff_hint,
         )
 
     def apply(
@@ -160,6 +168,7 @@ class ArtifactActionApplier:
         changed: bool,
         extra: dict[str, Any],
         event_bus: Any = None,
+        diff_hint: str | None = None,
     ) -> None:
         rel = self._rel(path)
         entry: dict[str, Any] = {
@@ -169,7 +178,14 @@ class ArtifactActionApplier:
             **extra,
         }
         if changed and before != after:
-            diff_text, truncated = unified_diff_bounded(before, after, rel)
+            hint = diff_hint or f"{action_type} → {rel}"
+            diff_text, truncated = unified_diff_bounded(
+                before,
+                after,
+                rel,
+                action_hint=hint,
+                context_lines=3,
+            )
             entry["diff"] = diff_text
             entry["diff_truncated"] = truncated
         else:
@@ -355,7 +371,14 @@ class ArtifactActionApplier:
         if isinstance(action, ActionInsertAfterInFile):
             path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
             before = self._read_bounded_file(path)
-            after = apply_insert_after(before, action.anchor, action.insertion)
+            opts = BoundedMatchOptions(
+                occurrence=action.occurrence,
+                must_be_unique=action.must_be_unique,
+                line_match=action.line_match,
+            )
+            after = apply_insert_after(
+                before, action.anchor, action.insertion, opts=opts
+            )
             self._apply_bounded_text_edit(
                 result=result,
                 path=path,
@@ -364,14 +387,31 @@ class ArtifactActionApplier:
                 after=after,
                 dry_run=dry_run,
                 event_bus=event_bus,
-                extra={"rel_path": action.rel_path},
+                extra={
+                    "rel_path": action.rel_path,
+                    "occurrence": action.occurrence,
+                    "must_be_unique": action.must_be_unique,
+                    "line_match": action.line_match,
+                },
+                diff_hint=(
+                    f"insert_after_in_file → {action.rel_path} "
+                    f"(line_match={action.line_match}, occurrence={action.occurrence}, "
+                    f"must_be_unique={action.must_be_unique})"
+                ),
             )
             return
 
         if isinstance(action, ActionInsertBeforeInFile):
             path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
             before = self._read_bounded_file(path)
-            after = apply_insert_before(before, action.anchor, action.insertion)
+            opts = BoundedMatchOptions(
+                occurrence=action.occurrence,
+                must_be_unique=action.must_be_unique,
+                line_match=action.line_match,
+            )
+            after = apply_insert_before(
+                before, action.anchor, action.insertion, opts=opts
+            )
             self._apply_bounded_text_edit(
                 result=result,
                 path=path,
@@ -380,14 +420,31 @@ class ArtifactActionApplier:
                 after=after,
                 dry_run=dry_run,
                 event_bus=event_bus,
-                extra={"rel_path": action.rel_path},
+                extra={
+                    "rel_path": action.rel_path,
+                    "occurrence": action.occurrence,
+                    "must_be_unique": action.must_be_unique,
+                    "line_match": action.line_match,
+                },
+                diff_hint=(
+                    f"insert_before_in_file → {action.rel_path} "
+                    f"(line_match={action.line_match}, occurrence={action.occurrence}, "
+                    f"must_be_unique={action.must_be_unique})"
+                ),
             )
             return
 
         if isinstance(action, ActionReplaceTextInFile):
             path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
             before = self._read_bounded_file(path)
-            after = apply_replace_text(before, action.old_text, action.new_text)
+            opts = BoundedMatchOptions(
+                occurrence=action.occurrence,
+                must_be_unique=action.must_be_unique,
+                line_match=action.line_match,
+            )
+            after = apply_replace_text(
+                before, action.old_text, action.new_text, opts=opts
+            )
             self._apply_bounded_text_edit(
                 result=result,
                 path=path,
@@ -396,18 +453,34 @@ class ArtifactActionApplier:
                 after=after,
                 dry_run=dry_run,
                 event_bus=event_bus,
-                extra={"rel_path": action.rel_path},
+                extra={
+                    "rel_path": action.rel_path,
+                    "occurrence": action.occurrence,
+                    "must_be_unique": action.must_be_unique,
+                    "line_match": action.line_match,
+                },
+                diff_hint=(
+                    f"replace_text_in_file → {action.rel_path} "
+                    f"(line_match={action.line_match}, occurrence={action.occurrence}, "
+                    f"must_be_unique={action.must_be_unique})"
+                ),
             )
             return
 
         if isinstance(action, ActionReplaceBlockInFile):
             path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
             before = self._read_bounded_file(path)
+            start_opts = BoundedMatchOptions(
+                occurrence=action.occurrence,
+                must_be_unique=action.must_be_unique,
+                line_match=action.line_match,
+            )
             after = apply_replace_block(
                 before,
                 action.start_marker,
                 action.end_marker,
                 action.new_body,
+                start_opts=start_opts,
             )
             self._apply_bounded_text_edit(
                 result=result,
@@ -417,7 +490,46 @@ class ArtifactActionApplier:
                 after=after,
                 dry_run=dry_run,
                 event_bus=event_bus,
-                extra={"rel_path": action.rel_path},
+                extra={
+                    "rel_path": action.rel_path,
+                    "occurrence": action.occurrence,
+                    "must_be_unique": action.must_be_unique,
+                    "line_match": action.line_match,
+                },
+                diff_hint=(
+                    f"replace_block_in_file → {action.rel_path} "
+                    f"(line_match={action.line_match}, occurrence={action.occurrence}, "
+                    f"must_be_unique={action.must_be_unique})"
+                ),
+            )
+            return
+
+        if isinstance(action, ActionReplaceLinesInFile):
+            path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
+            before = self._read_bounded_file(path)
+            after = apply_replace_lines(
+                before,
+                action.start_line,
+                action.end_line,
+                action.replacement,
+            )
+            self._apply_bounded_text_edit(
+                result=result,
+                path=path,
+                action_type="replace_lines_in_file",
+                before=before,
+                after=after,
+                dry_run=dry_run,
+                event_bus=event_bus,
+                extra={
+                    "rel_path": action.rel_path,
+                    "start_line": action.start_line,
+                    "end_line": action.end_line,
+                },
+                diff_hint=(
+                    f"replace_lines_in_file → {action.rel_path} "
+                    f"(lines {action.start_line}-{action.end_line})"
+                ),
             )
             return
 

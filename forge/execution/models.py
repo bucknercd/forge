@@ -44,43 +44,69 @@ class ActionWriteFile:
 
 @dataclass(frozen=True)
 class ActionInsertAfterInFile:
-    """Insert text immediately after the unique non-overlapping anchor substring."""
+    """
+    Insert after anchor. Substring mode: after matched substring end.
+    line_match: anchor must equal a full line's content (newlines normalized to \\n).
+    must_be_unique: require exactly one match; else use occurrence (1-based).
+    """
 
     rel_path: str
     anchor: str
     insertion: str
+    occurrence: int = 1
+    must_be_unique: bool = True
+    line_match: bool = False
 
 
 @dataclass(frozen=True)
 class ActionInsertBeforeInFile:
-    """Insert text immediately before the unique non-overlapping anchor substring."""
+    """Insert before anchor (substring or full-line match)."""
 
     rel_path: str
     anchor: str
     insertion: str
+    occurrence: int = 1
+    must_be_unique: bool = True
+    line_match: bool = False
 
 
 @dataclass(frozen=True)
 class ActionReplaceTextInFile:
-    """Replace exactly one non-overlapping occurrence of old_text with new_text."""
+    """Replace one occurrence of old_text (substring or full line) with new_text."""
 
     rel_path: str
     old_text: str
     new_text: str
+    occurrence: int = 1
+    must_be_unique: bool = True
+    line_match: bool = False
 
 
 @dataclass(frozen=True)
 class ActionReplaceBlockInFile:
     """
-    Replace one region: from start of start_marker through end of end_marker
-    (inclusive span), with new_body. Start marker must be globally unique
-    (non-overlapping); end is the first match after the start.
+    Replace from start of start region through end of end_marker (inclusive).
+    Start uses substring or full-line rules; end_marker is always a substring
+    found after the start region.
     """
 
     rel_path: str
     start_marker: str
     end_marker: str
     new_body: str
+    occurrence: int = 1
+    must_be_unique: bool = True
+    line_match: bool = False
+
+
+@dataclass(frozen=True)
+class ActionReplaceLinesInFile:
+    """Replace inclusive 1-based line range [start_line, end_line] with replacement lines."""
+
+    rel_path: str
+    start_line: int
+    end_line: int
+    replacement: str
 
 
 ForgeAction = Union[
@@ -93,6 +119,7 @@ ForgeAction = Union[
     ActionInsertBeforeInFile,
     ActionReplaceTextInFile,
     ActionReplaceBlockInFile,
+    ActionReplaceLinesInFile,
 ]
 
 
@@ -149,6 +176,9 @@ class ExecutionPlan:
                         "rel_path": a.rel_path,
                         "anchor": a.anchor,
                         "insertion": a.insertion,
+                        "occurrence": a.occurrence,
+                        "must_be_unique": a.must_be_unique,
+                        "line_match": a.line_match,
                     }
                 )
             elif isinstance(a, ActionInsertBeforeInFile):
@@ -158,6 +188,9 @@ class ExecutionPlan:
                         "rel_path": a.rel_path,
                         "anchor": a.anchor,
                         "insertion": a.insertion,
+                        "occurrence": a.occurrence,
+                        "must_be_unique": a.must_be_unique,
+                        "line_match": a.line_match,
                     }
                 )
             elif isinstance(a, ActionReplaceTextInFile):
@@ -167,6 +200,9 @@ class ExecutionPlan:
                         "rel_path": a.rel_path,
                         "old_text": a.old_text,
                         "new_text": a.new_text,
+                        "occurrence": a.occurrence,
+                        "must_be_unique": a.must_be_unique,
+                        "line_match": a.line_match,
                     }
                 )
             elif isinstance(a, ActionReplaceBlockInFile):
@@ -177,6 +213,19 @@ class ExecutionPlan:
                         "start_marker": a.start_marker,
                         "end_marker": a.end_marker,
                         "new_body": a.new_body,
+                        "occurrence": a.occurrence,
+                        "must_be_unique": a.must_be_unique,
+                        "line_match": a.line_match,
+                    }
+                )
+            elif isinstance(a, ActionReplaceLinesInFile):
+                out.append(
+                    {
+                        "type": "replace_lines_in_file",
+                        "rel_path": a.rel_path,
+                        "start_line": a.start_line,
+                        "end_line": a.end_line,
+                        "replacement": a.replacement,
                     }
                 )
         return {"milestone_id": self.milestone_id, "actions": out}
@@ -225,6 +274,9 @@ class ExecutionPlan:
                         rel_path=item["rel_path"],
                         anchor=item["anchor"],
                         insertion=item["insertion"],
+                        occurrence=int(item.get("occurrence", 1)),
+                        must_be_unique=bool(item.get("must_be_unique", True)),
+                        line_match=bool(item.get("line_match", False)),
                     )
                 )
             elif t == "insert_before_in_file":
@@ -233,6 +285,9 @@ class ExecutionPlan:
                         rel_path=item["rel_path"],
                         anchor=item["anchor"],
                         insertion=item["insertion"],
+                        occurrence=int(item.get("occurrence", 1)),
+                        must_be_unique=bool(item.get("must_be_unique", True)),
+                        line_match=bool(item.get("line_match", False)),
                     )
                 )
             elif t == "replace_text_in_file":
@@ -241,6 +296,9 @@ class ExecutionPlan:
                         rel_path=item["rel_path"],
                         old_text=item["old_text"],
                         new_text=item["new_text"],
+                        occurrence=int(item.get("occurrence", 1)),
+                        must_be_unique=bool(item.get("must_be_unique", True)),
+                        line_match=bool(item.get("line_match", False)),
                     )
                 )
             elif t == "replace_block_in_file":
@@ -250,6 +308,18 @@ class ExecutionPlan:
                         start_marker=item["start_marker"],
                         end_marker=item["end_marker"],
                         new_body=item["new_body"],
+                        occurrence=int(item.get("occurrence", 1)),
+                        must_be_unique=bool(item.get("must_be_unique", True)),
+                        line_match=bool(item.get("line_match", False)),
+                    )
+                )
+            elif t == "replace_lines_in_file":
+                actions.append(
+                    ActionReplaceLinesInFile(
+                        rel_path=item["rel_path"],
+                        start_line=int(item["start_line"]),
+                        end_line=int(item["end_line"]),
+                        replacement=item["replacement"],
                     )
                 )
             else:

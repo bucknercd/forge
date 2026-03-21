@@ -31,6 +31,6 @@
 - **Validation**: Verify that run history is correctly recorded and persisted.
 
 ## Milestone 7: Bounded file edit actions
-- **Objective**: Support safer, reviewable edits to allowed project files without always using full-file `write_file`.
-- **Scope**: Deterministic Forge Actions `insert_after_in_file`, `insert_before_in_file`, `replace_text_in_file`, and `replace_block_in_file` on paths under `examples/`, `src/`, `scripts/`, or `tests/`; substring matching must be unique (non-overlapping count exactly one) or the action fails; preserve preview/dry-run diffs; keep `write_file` for bootstrap scenarios.
-- **Validation**: Milestone Forge Validation may use `path_file_contains` (and existing design-doc rules) to assert post-conditions; integration tests cover success, zero-match, and ambiguous-match failures.
+- **Objective**: Support safer, reviewable edits to allowed project files without always using full-file `write_file`, including evolving an existing codebase.
+- **Scope**: Deterministic actions `insert_after_in_file`, `insert_before_in_file`, `replace_text_in_file`, `replace_block_in_file`, and `replace_lines_in_file` under `examples/`, `src/`, `scripts/`, `tests/`; optional `occurrence` / `must_be_unique` / `line_match` on substring actions; newline normalization to `\n`; `replace_lines_in_file` for inclusive 1-based line ranges with safe bounds checks; readable preview diffs (context + action hint); keep `write_file` for bootstrap.
+- **Validation**: `path_file_contains` (and design-doc rules) for post-conditions; tests cover success, ambiguity, zero-match, invalid line ranges, and realistic multi-step edits on an existing file.

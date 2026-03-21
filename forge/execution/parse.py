@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from forge.design_manager import Milestone
 from forge.execution.file_edits import unescape_action_body
 from forge.execution.models import (
@@ -14,6 +16,7 @@ from forge.execution.models import (
     ActionInsertBeforeInFile,
     ActionReplaceTextInFile,
     ActionReplaceBlockInFile,
+    ActionReplaceLinesInFile,
     ForgeAction,
 )
 from forge.execution.validation_rules import (
@@ -34,7 +37,13 @@ BOUNDED_FILE_EDIT_CMDS = frozenset(
         "insert_before_in_file",
         "replace_text_in_file",
         "replace_block_in_file",
+        "replace_lines_in_file",
     }
+)
+
+# Trailing ` | key=value ...` on bounded-edit payloads (values are non-space tokens).
+_TRAILING_BOUNDED_OPTS_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*=\S+)(\s+[A-Za-z_][A-Za-z0-9_]*=\S+)*$"
 )
 
 
@@ -135,6 +144,52 @@ def parse_forge_action_line(
     )
 
 
+def _split_trailing_bounded_options(payload_raw: str) -> tuple[str, str]:
+    s = payload_raw.rstrip()
+    if " | " not in s:
+        return s, ""
+    base, tail = s.rsplit(" | ", 1)
+    t = tail.strip()
+    if not t or "=" not in t or _TRAILING_BOUNDED_OPTS_RE.match(t) is None:
+        return s, ""
+    return base.rstrip(), t
+
+
+def _parse_bounded_option_tokens(opt_line: str) -> dict[str, str | int | bool]:
+    out: dict[str, str | int | bool] = {}
+    for tok in opt_line.split():
+        if "=" not in tok:
+            continue
+        k, v = tok.split("=", 1)
+        key = k.strip().lower()
+        vs = v.strip()
+        vl = vs.lower()
+        if vl in ("true", "false"):
+            out[key] = vl == "true"
+        elif vs.isdigit():
+            out[key] = int(vs)
+        else:
+            out[key] = vs
+    return out
+
+
+def _bounded_match_fields(
+    opts: dict[str, str | int | bool], line_no: int | None
+) -> tuple[int, bool, bool]:
+    occurrence = int(opts.get("occurrence", 1))
+    must_be_unique = bool(opts.get("must_be_unique", True))
+    line_match = bool(opts.get("line_match", False))
+    if must_be_unique and occurrence != 1:
+        raise ValueError(
+            _fmt_diag(
+                "forge action",
+                "must_be_unique=true requires occurrence=1 (or omit occurrence)",
+                line_no,
+            )
+        )
+    return occurrence, must_be_unique, line_match
+
+
 def _parse_bounded_file_edit(cmd: str, raw: str, line_no: int | None) -> ForgeAction:
     if " | " not in raw:
         raise ValueError(
@@ -159,8 +214,46 @@ def _parse_bounded_file_edit(cmd: str, raw: str, line_no: int | None) -> ForgeAc
         raise ValueError(
             _fmt_diag("forge action", f"{cmd} empty path: {raw!r}", line_no)
         )
-    payload = unescape_action_body(payload_raw)
+    work_raw, opt_line = _split_trailing_bounded_options(payload_raw)
+    payload = unescape_action_body(work_raw)
+    opt_dict = _parse_bounded_option_tokens(opt_line)
+    occ, mu, lm = _bounded_match_fields(opt_dict, line_no)
     sep = FORGE_BOUNDED_EDIT_SEP
+
+    if cmd == "replace_lines_in_file":
+        chunks = payload.split(sep)
+        if len(chunks) != 3:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"replace_lines_in_file needs: start_line{sep}end_line{sep}replacement: {raw!r}",
+                    line_no,
+                )
+            )
+        sa, sb, repl = chunks[0].strip(), chunks[1].strip(), chunks[2]
+        if opt_dict:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"replace_lines_in_file does not accept trailing options: {raw!r}",
+                    line_no,
+                )
+            )
+        if not sa.isdigit() or not sb.isdigit():
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"replace_lines_in_file: start_line and end_line must be integers: {raw!r}",
+                    line_no,
+                )
+            )
+        return ActionReplaceLinesInFile(
+            rel_path=rel_path,
+            start_line=int(sa),
+            end_line=int(sb),
+            replacement=repl,
+        )
+
     if cmd == "replace_block_in_file":
         chunks = payload.split(sep)
         if len(chunks) != 3:
@@ -186,6 +279,9 @@ def _parse_bounded_file_edit(cmd: str, raw: str, line_no: int | None) -> ForgeAc
             start_marker=start_m,
             end_marker=end_m,
             new_body=new_body,
+            occurrence=occ,
+            must_be_unique=mu,
+            line_match=lm,
         )
     parts = payload.split(sep)
     if len(parts) != 2:
@@ -207,7 +303,12 @@ def _parse_bounded_file_edit(cmd: str, raw: str, line_no: int | None) -> ForgeAc
                 )
             )
         return ActionInsertAfterInFile(
-            rel_path=rel_path, anchor=first_part, insertion=second_part
+            rel_path=rel_path,
+            anchor=first_part,
+            insertion=second_part,
+            occurrence=occ,
+            must_be_unique=mu,
+            line_match=lm,
         )
     if cmd == "insert_before_in_file":
         if not first_part:
@@ -219,7 +320,12 @@ def _parse_bounded_file_edit(cmd: str, raw: str, line_no: int | None) -> ForgeAc
                 )
             )
         return ActionInsertBeforeInFile(
-            rel_path=rel_path, anchor=first_part, insertion=second_part
+            rel_path=rel_path,
+            anchor=first_part,
+            insertion=second_part,
+            occurrence=occ,
+            must_be_unique=mu,
+            line_match=lm,
         )
     if cmd == "replace_text_in_file":
         if not first_part:
@@ -231,7 +337,12 @@ def _parse_bounded_file_edit(cmd: str, raw: str, line_no: int | None) -> ForgeAc
                 )
             )
         return ActionReplaceTextInFile(
-            rel_path=rel_path, old_text=first_part, new_text=second_part
+            rel_path=rel_path,
+            old_text=first_part,
+            new_text=second_part,
+            occurrence=occ,
+            must_be_unique=mu,
+            line_match=lm,
         )
     raise ValueError(_fmt_diag("forge action", f"Unknown bounded edit {cmd!r}", line_no))
 

@@ -83,6 +83,16 @@ def _planner_warnings(planner_meta: dict, plan: ExecutionPlan) -> list[str]:
                     a.get("end_marker", "")
                 ).strip():
                     body_empty += 1
+            elif t == "replace_lines_in_file":
+                sl = a.get("start_line")
+                el = a.get("end_line")
+                if (
+                    not isinstance(sl, int)
+                    or not isinstance(el, int)
+                    or sl < 1
+                    or el < sl
+                ):
+                    body_empty += 1
         if body_empty:
             warnings.append(
                 f"LLM plan includes {body_empty} action(s) with empty anchor/body/markers."

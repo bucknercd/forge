@@ -10,6 +10,7 @@ from forge.execution.models import (
     ActionInsertAfterInFile,
     ActionInsertBeforeInFile,
     ActionReplaceBlockInFile,
+    ActionReplaceLinesInFile,
     ActionReplaceTextInFile,
     ActionWriteFile,
     ExecutionPlan,
@@ -63,6 +64,7 @@ def target_paths_for_plan(plan: ExecutionPlan) -> list[Path]:
                 ActionInsertBeforeInFile,
                 ActionReplaceTextInFile,
                 ActionReplaceBlockInFile,
+                ActionReplaceLinesInFile,
             ),
         ):
             try:

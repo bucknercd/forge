@@ -104,6 +104,8 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
         "  insert_before_in_file <rel_path> | anchor @@FORGE@@ insertion\n"
         "  replace_text_in_file <rel_path> | old_text @@FORGE@@ new_text\n"
         "  replace_block_in_file <rel_path> | start @@FORGE@@ end @@FORGE@@ new_body\n"
+        "  replace_lines_in_file <rel_path> | start_line @@FORGE@@ end_line @@FORGE@@ replacement\n"
+        "  Optional trailing: | occurrence=N must_be_unique=false line_match=true\n"
         "  (use literal @@FORGE@@ with spaces as shown; \\\\n for newlines in parts)\n"
         "  add_decision | <title> | <rationale>\n"
         "  mark_milestone_completed\n"

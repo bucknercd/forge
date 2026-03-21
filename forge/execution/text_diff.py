@@ -10,11 +10,14 @@ def unified_diff_bounded(
     after: str,
     label: str,
     *,
-    max_lines: int = 48,
-    max_chars: int = 8000,
+    max_lines: int = 64,
+    max_chars: int = 12000,
+    context_lines: int = 3,
+    action_hint: str | None = None,
 ) -> tuple[str, bool]:
     """
     Return (diff_text, truncated). Empty string if before == after.
+    action_hint is echoed as a header so multi-action runs are easier to read.
     """
     if before == after:
         return "", False
@@ -26,9 +29,14 @@ def unified_diff_bounded(
             fromfile=f"a/{label}",
             tofile=f"b/{label}",
             lineterm="",
+            n=context_lines,
         )
     )
-    text = "\n".join(diff_lines)
+    header_lines: list[str] = []
+    if action_hint:
+        header_lines.append(f"# forge-action: {action_hint}")
+        header_lines.append("# ---")
+    text = "\n".join(header_lines + diff_lines)
     if not text.strip():
         return "", False
 

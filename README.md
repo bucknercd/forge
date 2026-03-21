@@ -65,20 +65,32 @@ Use `--gate-test-cmd 'pytest -q'` (or similar) to match whatever the LLM milesto
 
 **Bounded edits vs `write_file`**
 
-Use **`write_file`** to create or replace a whole file (good for first-cut scaffolding). For smaller, reviewable changes, prefer **bounded** actions. Payloads use a literal separator **` @@FORGE@@ `** (spaces matter) between parts; use `\n` inside parts as usual.
+Use **`write_file`** to create or replace a whole file (good for first-cut scaffolding). To **evolve** existing code under `examples/`, `src/`, `scripts/`, or `tests/`, prefer bounded actions: smaller diffs, clearer review, safe failure when a match is not unique.
+
+Payloads use **` @@FORGE@@ `** (spaces matter) between parts; use `\n` in parts as usual. Files are normalized to `\n` before matching.
 
 ```text
-# After a unique line/snippet (exactly one non-overlapping match in the file):
+# Default: substring must match exactly once (non-overlapping). Otherwise apply fails.
 insert_after_in_file examples/app.py | return 0 @@FORGE@@ \n    log("ok")\n
 
-# Replace one unique occurrence:
-replace_text_in_file examples/app.py | OLD_TOKEN @@FORGE@@ NEW_TOKEN
+# Match a full line (after newline normalization); still requires uniqueness unless you opt out:
+replace_text_in_file examples/app.py |     return None @@FORGE@@     return 42 | line_match=true
 
-# Replace from start of first marker through end of second (start marker must be unique in the file):
+# Nth match when multiple exist (must_be_unique=false):
+insert_before_in_file examples/t.py | import os @@FORGE@@ from pathlib import Path\n | must_be_unique=false occurrence=2
+
+# Line-range patch (1-based inclusive lines); fails if range is out of bounds:
+replace_lines_in_file examples/app.py | 12 @@FORGE@@ 18 @@FORGE@@ def refactored():\n    return True\n
+
+# Block replace (start marker unique by default; end is first substring after start region):
 replace_block_in_file examples/config.yaml | --- @@FORGE@@ ... @@FORGE@@ ---\nnew: block\n
 ```
 
-If a substring matches **0** or **more than one** non-overlapping time, the action **fails** and apply stops with an error (dry-run/preview still shows the intended diff when the action would succeed).
+Optional trailing segment: ` | occurrence=2 must_be_unique=false line_match=true` (space-separated `key=value`; not used with `replace_lines_in_file`).
+
+**Preview / diffs**: unified diffs use **3 lines of context** and a `# forge-action: …` header so you can see which action produced each change.
+
+**Safety**: **0** matches, **out-of-range** lines, or (with default `must_be_unique=true`) **multiple** matches → **fail** with no partial write. Dry-run/preview still shows the diff when the action would succeed.
 
 ---
 
