@@ -176,15 +176,15 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add optional LLM-assisted plan generation for milestones.
+Add planner selection through CLI and repo policy.
 
-- introduce an optional planner interface that can generate bounded execution plans from milestone definitions
-- keep deterministic plan generation as the default path
-- require all LLM-generated plans to conform to the existing ExecutionPlan and action schema
-- route generated plans through existing preview, reviewed-plan, stale-check, and gate workflows
-- prevent the planner from mutating files directly
-- surface clear diagnostics when generated plans are invalid or unsupported
-- keep the feature opt-in and configurable by repo policy or CLI
+- allow planner mode selection for preview and reviewed-plan save workflows
+- keep deterministic planning as the default
+- support repo-configured planner defaults
+- support explicit CLI overrides for planner mode
+- fail clearly when an LLM planner is selected but not configured
+- preserve existing bounded-plan validation and reviewed-plan safety controls
+- keep planner choice separate from execution/apply behavior
 
 Goal:
-Allow Forge to use an LLM as an optional planning assistant while preserving deterministic execution, human review, and verification controls.
+Make optional LLM-assisted planning usable through normal Forge workflows without changing deterministic defaults.

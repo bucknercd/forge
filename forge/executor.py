@@ -14,6 +14,7 @@ from forge.execution.models import ActionAddDecision, ApplyResult, ExecutionPlan
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.apply import ArtifactActionApplier
 from forge.gate_runner import run_gates_for_milestone, summarize_gate_results
+from forge.planner import DeterministicPlanner, Planner
 from forge.reviewed_plan import (
     load_reviewed_plan,
     save_reviewed_plan,
@@ -93,7 +94,9 @@ class Executor:
         return Executor._execute_milestone_internal(milestone_id)
 
     @staticmethod
-    def preview_milestone(milestone_id: int) -> dict:
+    def preview_milestone(
+        milestone_id: int, planner: Planner | None = None
+    ) -> dict:
         """
         Build and simulate a milestone execution plan without side effects.
         """
@@ -104,8 +107,9 @@ class Executor:
         if not milestone:
             return {"ok": False, "message": "Invalid milestone ID."}
 
+        planner = planner or DeterministicPlanner()
         try:
-            plan = ExecutionPlanBuilder.build(milestone)
+            plan = planner.build_plan(milestone)
             _ = ExecutionPlanBuilder.parse_validation_rules(milestone)
         except ValueError as exc:
             return {"ok": False, "message": str(exc), "milestone_id": milestone_id}
@@ -116,6 +120,7 @@ class Executor:
             "ok": len(preview.errors) == 0,
             "milestone_id": milestone.id,
             "title": milestone.title,
+            "planner_mode": planner.mode,
             "execution_plan": plan.to_serializable(),
             "files_changed": preview.normalized_files_changed(),
             "artifact_summary": preview.human_summary(),
@@ -124,8 +129,11 @@ class Executor:
         }
 
     @staticmethod
-    def save_reviewed_plan_for_milestone(milestone_id: int) -> dict:
-        preview = Executor.preview_milestone(milestone_id)
+    def save_reviewed_plan_for_milestone(
+        milestone_id: int, planner: Planner | None = None
+    ) -> dict:
+        planner = planner or DeterministicPlanner()
+        preview = Executor.preview_milestone(milestone_id, planner=planner)
         if not preview.get("ok"):
             return preview
         try:
@@ -133,7 +141,9 @@ class Executor:
             if not milestone:
                 return {"ok": False, "message": "Invalid milestone ID."}
             plan = ExecutionPlan.from_serializable(preview["execution_plan"])
-            payload = save_reviewed_plan(milestone_id, milestone.title, plan)
+            payload = save_reviewed_plan(
+                milestone_id, milestone.title, plan, planner_mode=planner.mode
+            )
             preview["plan_id"] = payload["plan_id"]
             preview["plan_file"] = str((Paths.SYSTEM_DIR / "reviewed_plans" / f"{payload['plan_id']}.json"))
             return preview
@@ -196,7 +206,13 @@ class Executor:
             return {"ok": False, "message": "Milestone for reviewed plan no longer exists."}
 
         try:
-            current_plan = ExecutionPlanBuilder.build(milestone)
+            planner_mode = payload.get("planner_mode", "deterministic")
+            if planner_mode == "deterministic":
+                current_plan = DeterministicPlanner().build_plan(milestone)
+            else:
+                # For non-deterministic planners, compare against reviewed plan
+                # and rely on existing milestone/target hash stale checks.
+                current_plan = ExecutionPlan.from_serializable(payload["plan"])
         except ValueError as exc:
             return {"ok": False, "message": f"Current milestone plan invalid: {exc}"}
 
@@ -242,6 +258,7 @@ class Executor:
             "plan_id": plan_id,
             "milestone_id": milestone_id,
             "title": milestone.title,
+            "planner_mode": payload.get("planner_mode", "deterministic"),
             "ok": ok_final,
             "apply_ok": apply_ok,
             "gates_ok": gates_ok,
@@ -285,6 +302,7 @@ class Executor:
             "plan_id": plan_id,
             "milestone_id": milestone_id,
             "title": milestone.title,
+            "planner_mode": payload.get("planner_mode", "deterministic"),
             "artifact_summary": artifact_summary,
             "gate_summary": gate_summary,
             "gate_results": gates,
@@ -372,7 +390,7 @@ class Executor:
         result_file = result_dir / f"milestone_{milestone_id}.json"
 
         try:
-            plan = ExecutionPlanBuilder.build(milestone)
+            plan = DeterministicPlanner().build_plan(milestone)
         except ValueError as exc:
             Executor._write_failure_payload(
                 result_file,
