@@ -20,10 +20,14 @@ class ReviewedApplyPolicy:
     test_output_max_chars: int = DEFAULT_TEST_OUTPUT_MAX_CHARS
 
 
+_LLM_CLIENT_IDS = frozenset({"stub", "openai"})
+
+
 @dataclass(frozen=True)
 class PlannerPolicy:
     mode: str = "deterministic"  # deterministic | llm
-    llm_client: str | None = None  # currently supported: "stub"
+    llm_client: str | None = None  # stub | openai
+    llm_model: str | None = None  # non-secret model id for provider-backed clients
 
 
 def policy_file_path() -> Path:
@@ -96,14 +100,19 @@ def load_planner_policy() -> tuple[PlannerPolicy, str | None]:
     try:
         mode = _get_mode(section, "mode", default="deterministic")
         llm_client = _get_opt_str(section, "llm_client", default=None)
+        if llm_client is not None and llm_client not in _LLM_CLIENT_IDS:
+            raise ValueError(
+                f"'llm_client' must be one of: {', '.join(sorted(_LLM_CLIENT_IDS))}."
+            )
+        llm_model = _get_opt_str(section, "llm_model", default=None)
     except ValueError as exc:
         return PlannerPolicy(), f"Invalid policy file {path}: {exc}"
-    return PlannerPolicy(mode=mode, llm_client=llm_client), None
+    return PlannerPolicy(mode=mode, llm_client=llm_client, llm_model=llm_model), None
 
 
 def merge_planner_policy(base: PlannerPolicy, *, mode_override: str | None) -> PlannerPolicy:
     mode = mode_override or base.mode
-    return PlannerPolicy(mode=mode, llm_client=base.llm_client)
+    return PlannerPolicy(mode=mode, llm_client=base.llm_client, llm_model=base.llm_model)
 
 
 def merge_reviewed_apply_policy(

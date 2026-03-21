@@ -126,6 +126,32 @@ forge execute-next           # run the next eligible milestone (orchestration)
 
 Other commands (`milestone-list`, `milestone-show`, `milestone-execute`, etc.) are available; run `forge --help` after install.
 
+### Planner policy (`forge-policy.json`)
+
+Optional `planner` section selects how `milestone-preview` / reviewed-plan generation builds an execution plan:
+
+| Field | Values | Notes |
+|-------|--------|--------|
+| `mode` | `deterministic` (default), `llm` | Deterministic uses milestone `Forge Actions` only. |
+| `llm_client` | `stub`, `openai` | Required when `mode` is `llm`. |
+| `llm_model` | string (optional) | Non-secret model id for provider clients (e.g. OpenAI); defaults internally when omitted. |
+
+**Secrets never belong in this file.** For `llm_client: openai`, set API credentials via environment:
+
+- `FORGE_OPENAI_API_KEY` or `OPENAI_API_KEY`
+- Optional: `FORGE_OPENAI_BASE_URL` (defaults to `https://api.openai.com/v1`)
+
+Example (offline stub):
+
+```json
+{
+  "planner": {
+    "mode": "llm",
+    "llm_client": "stub"
+  }
+}
+```
+
 ## Where things live
 
 ```
