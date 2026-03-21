@@ -216,35 +216,28 @@ Current file creation/edit support includes:
 See README Quick Start (vertical slice) for usage and expected behavior.
 
 #### Execution progress + run logs
-Forge now emits structured run events during vertical-slice execution.
+Structured run events ship for **`forge vertical-slice`** (and the same bus/hooks can extend to other commands later).
 
-Current behavior:
-- human-readable progress in CLI output
-- structured event persistence under `.forge/runs/<run_id>/`
-- JSONL event log (`events.jsonl`)
-- `run_meta.json` metadata
-- `--json` output includes collected events and run paths
+- **CLI**: concise, event-driven progress (not `print` spaghetti or logging-as-UX); optional `--verbose`
+- **Persistence**: `.forge/runs/<run_id>/` with `run_meta.json` + **`events.jsonl`** (one JSON object per line)
+- **`--json`**: same payload shape as before, plus `events`, `run_id`, `run_log_dir`, `events_path`
 
-Core event types include:
-- `run_started`
-- `phase_started`
-- `phase_completed`
-- `artifact_written`
-- `plan_saved`
-- `action_applied`
-- `validation_started`
-- `validation_completed`
-- `run_completed`
-- `run_failed`
+Event types include: `run_started`, `phase_started`, `phase_completed`, `artifact_written`, `plan_saved`, `action_applied`, `validation_started`, `validation_completed`, `run_completed`, `run_failed`.
 
-This improves visibility, debuggability, and future extensibility without coupling user-facing progress to Python logging.
+#### Bounded file edits (first slice)
+Forge Actions can perform **minimal bounded edits** on allowed repo paths (`examples/`, `src/`, `scripts/`, `tests/`) using deterministic substring rules:
+
+- `insert_after_in_file`, `insert_before_in_file`, `replace_text_in_file`, `replace_block_in_file` (see README)
+- Separators: literal ` @@FORGE@@ ` between payload parts; `\\n` escapes in payloads
+- **Zero or multiple** non-overlapping matches → safe failure (no partial writes)
+- **`write_file`** remains for bootstrapping / full-file cases
 
 ### Active TODO
 
-1. Introduce structured/bounded code edit actions
-   - replace naive/full-file writes with minimal structured edits
-   - support insert/replace/update blocks safely
-   - improve diff visibility and reviewability
+1. Extend bounded edits and reduce `write_file` usage
+   - richer edit primitives (e.g. line-anchored, patch-style) where reviewability wins
+   - optional policy limits (per-run file touch counts, path classes)
+   - apply the same event + run-log patterns to `milestone-apply-plan` / workflow paths
 
 ### Next TODOs (Stabilization Phase)
 

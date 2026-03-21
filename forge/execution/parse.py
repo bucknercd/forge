@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from forge.design_manager import Milestone
+from forge.execution.file_edits import unescape_action_body
 from forge.execution.models import (
     ActionAppendSection,
     ActionReplaceSection,
     ActionAddDecision,
     ActionMarkMilestoneCompleted,
     ActionWriteFile,
+    ActionInsertAfterInFile,
+    ActionInsertBeforeInFile,
+    ActionReplaceTextInFile,
+    ActionReplaceBlockInFile,
     ForgeAction,
 )
 from forge.execution.validation_rules import (
@@ -19,6 +24,18 @@ from forge.execution.validation_rules import (
 )
 
 TARGETS = frozenset({"requirements", "architecture", "decisions", "milestones"})
+
+# Separates parts inside the right-hand side of `cmd path | ...` for bounded file edits.
+FORGE_BOUNDED_EDIT_SEP = " @@FORGE@@ "
+
+BOUNDED_FILE_EDIT_CMDS = frozenset(
+    {
+        "insert_after_in_file",
+        "insert_before_in_file",
+        "replace_text_in_file",
+        "replace_block_in_file",
+    }
+)
 
 
 def _parse_target(tok: str, line_no: int | None = None, kind: str = "forge item") -> str:
@@ -69,10 +86,11 @@ def parse_forge_action_line(
             raise ValueError(
                 _fmt_diag("forge action", f"write_file empty path: {raw!r}", line_no)
             )
-        body_resolved = (
-            body.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
-        )
+        body_resolved = unescape_action_body(body)
         return ActionWriteFile(rel_path=rel_path, body=body_resolved)
+
+    if first in BOUNDED_FILE_EDIT_CMDS:
+        return _parse_bounded_file_edit(first, raw, line_no)
 
     if first == "add_decision":
         return _parse_add_decision(line, milestone)
@@ -115,6 +133,107 @@ def parse_forge_action_line(
     raise ValueError(
         _fmt_diag("forge action", f"Unknown command {parts[0]!r}", line_no)
     )
+
+
+def _parse_bounded_file_edit(cmd: str, raw: str, line_no: int | None) -> ForgeAction:
+    if " | " not in raw:
+        raise ValueError(
+            _fmt_diag(
+                "forge action",
+                f"{cmd} expects: {cmd} <rel_path> | <parts separated by{FORGE_BOUNDED_EDIT_SEP!r}>: {raw!r}",
+                line_no,
+            )
+        )
+    left, payload_raw = raw.split(" | ", 1)
+    lparts = left.split(None, 1)
+    if len(lparts) < 2:
+        raise ValueError(
+            _fmt_diag(
+                "forge action",
+                f"{cmd} missing relative path: {raw!r}",
+                line_no,
+            )
+        )
+    rel_path = lparts[1].strip()
+    if not rel_path:
+        raise ValueError(
+            _fmt_diag("forge action", f"{cmd} empty path: {raw!r}", line_no)
+        )
+    payload = unescape_action_body(payload_raw)
+    sep = FORGE_BOUNDED_EDIT_SEP
+    if cmd == "replace_block_in_file":
+        chunks = payload.split(sep)
+        if len(chunks) != 3:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"replace_block_in_file needs exactly two separators {sep!r} "
+                    f"(start, end, new_body): {raw!r}",
+                    line_no,
+                )
+            )
+        start_m, end_m, new_body = chunks[0], chunks[1], chunks[2]
+        if not start_m or not end_m:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"replace_block_in_file: empty start or end marker: {raw!r}",
+                    line_no,
+                )
+            )
+        return ActionReplaceBlockInFile(
+            rel_path=rel_path,
+            start_marker=start_m,
+            end_marker=end_m,
+            new_body=new_body,
+        )
+    parts = payload.split(sep)
+    if len(parts) != 2:
+        raise ValueError(
+            _fmt_diag(
+                "forge action",
+                f"{cmd} needs exactly one separator {sep!r} between two parts: {raw!r}",
+                line_no,
+            )
+        )
+    first_part, second_part = parts[0], parts[1]
+    if cmd == "insert_after_in_file":
+        if not first_part:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"insert_after_in_file: empty anchor: {raw!r}",
+                    line_no,
+                )
+            )
+        return ActionInsertAfterInFile(
+            rel_path=rel_path, anchor=first_part, insertion=second_part
+        )
+    if cmd == "insert_before_in_file":
+        if not first_part:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"insert_before_in_file: empty anchor: {raw!r}",
+                    line_no,
+                )
+            )
+        return ActionInsertBeforeInFile(
+            rel_path=rel_path, anchor=first_part, insertion=second_part
+        )
+    if cmd == "replace_text_in_file":
+        if not first_part:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"replace_text_in_file: empty old_text: {raw!r}",
+                    line_no,
+                )
+            )
+        return ActionReplaceTextInFile(
+            rel_path=rel_path, old_text=first_part, new_text=second_part
+        )
+    raise ValueError(_fmt_diag("forge action", f"Unknown bounded edit {cmd!r}", line_no))
 
 
 def _parse_add_decision(line: str, milestone: Milestone) -> ActionAddDecision:

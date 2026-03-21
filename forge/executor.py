@@ -68,12 +68,24 @@ def _planner_warnings(planner_meta: dict, plan: ExecutionPlan) -> list[str]:
             )
         body_empty = 0
         for a in actions:
-            if a.get("type") in {"append_section", "replace_section", "write_file"}:
+            t = a.get("type")
+            if t in {"append_section", "replace_section", "write_file"}:
                 if not str(a.get("body", "")).strip():
+                    body_empty += 1
+            elif t in {"insert_after_in_file", "insert_before_in_file"}:
+                if not str(a.get("anchor", "")).strip():
+                    body_empty += 1
+            elif t == "replace_text_in_file":
+                if not str(a.get("old_text", "")).strip():
+                    body_empty += 1
+            elif t == "replace_block_in_file":
+                if not str(a.get("start_marker", "")).strip() or not str(
+                    a.get("end_marker", "")
+                ).strip():
                     body_empty += 1
         if body_empty:
             warnings.append(
-                f"LLM plan includes {body_empty} section/write_file action(s) with empty body."
+                f"LLM plan includes {body_empty} action(s) with empty anchor/body/markers."
             )
     return warnings
 

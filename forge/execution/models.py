@@ -42,12 +42,57 @@ class ActionWriteFile:
     body: str
 
 
+@dataclass(frozen=True)
+class ActionInsertAfterInFile:
+    """Insert text immediately after the unique non-overlapping anchor substring."""
+
+    rel_path: str
+    anchor: str
+    insertion: str
+
+
+@dataclass(frozen=True)
+class ActionInsertBeforeInFile:
+    """Insert text immediately before the unique non-overlapping anchor substring."""
+
+    rel_path: str
+    anchor: str
+    insertion: str
+
+
+@dataclass(frozen=True)
+class ActionReplaceTextInFile:
+    """Replace exactly one non-overlapping occurrence of old_text with new_text."""
+
+    rel_path: str
+    old_text: str
+    new_text: str
+
+
+@dataclass(frozen=True)
+class ActionReplaceBlockInFile:
+    """
+    Replace one region: from start of start_marker through end of end_marker
+    (inclusive span), with new_body. Start marker must be globally unique
+    (non-overlapping); end is the first match after the start.
+    """
+
+    rel_path: str
+    start_marker: str
+    end_marker: str
+    new_body: str
+
+
 ForgeAction = Union[
     ActionAppendSection,
     ActionReplaceSection,
     ActionAddDecision,
     ActionMarkMilestoneCompleted,
     ActionWriteFile,
+    ActionInsertAfterInFile,
+    ActionInsertBeforeInFile,
+    ActionReplaceTextInFile,
+    ActionReplaceBlockInFile,
 ]
 
 
@@ -97,6 +142,43 @@ class ExecutionPlan:
                         "body": a.body,
                     }
                 )
+            elif isinstance(a, ActionInsertAfterInFile):
+                out.append(
+                    {
+                        "type": "insert_after_in_file",
+                        "rel_path": a.rel_path,
+                        "anchor": a.anchor,
+                        "insertion": a.insertion,
+                    }
+                )
+            elif isinstance(a, ActionInsertBeforeInFile):
+                out.append(
+                    {
+                        "type": "insert_before_in_file",
+                        "rel_path": a.rel_path,
+                        "anchor": a.anchor,
+                        "insertion": a.insertion,
+                    }
+                )
+            elif isinstance(a, ActionReplaceTextInFile):
+                out.append(
+                    {
+                        "type": "replace_text_in_file",
+                        "rel_path": a.rel_path,
+                        "old_text": a.old_text,
+                        "new_text": a.new_text,
+                    }
+                )
+            elif isinstance(a, ActionReplaceBlockInFile):
+                out.append(
+                    {
+                        "type": "replace_block_in_file",
+                        "rel_path": a.rel_path,
+                        "start_marker": a.start_marker,
+                        "end_marker": a.end_marker,
+                        "new_body": a.new_body,
+                    }
+                )
         return {"milestone_id": self.milestone_id, "actions": out}
 
     @staticmethod
@@ -136,6 +218,39 @@ class ExecutionPlan:
             elif t == "write_file":
                 actions.append(
                     ActionWriteFile(rel_path=item["rel_path"], body=item["body"])
+                )
+            elif t == "insert_after_in_file":
+                actions.append(
+                    ActionInsertAfterInFile(
+                        rel_path=item["rel_path"],
+                        anchor=item["anchor"],
+                        insertion=item["insertion"],
+                    )
+                )
+            elif t == "insert_before_in_file":
+                actions.append(
+                    ActionInsertBeforeInFile(
+                        rel_path=item["rel_path"],
+                        anchor=item["anchor"],
+                        insertion=item["insertion"],
+                    )
+                )
+            elif t == "replace_text_in_file":
+                actions.append(
+                    ActionReplaceTextInFile(
+                        rel_path=item["rel_path"],
+                        old_text=item["old_text"],
+                        new_text=item["new_text"],
+                    )
+                )
+            elif t == "replace_block_in_file":
+                actions.append(
+                    ActionReplaceBlockInFile(
+                        rel_path=item["rel_path"],
+                        start_marker=item["start_marker"],
+                        end_marker=item["end_marker"],
+                        new_body=item["new_body"],
+                    )
                 )
             else:
                 raise ValueError(f"Unknown action type in stored plan: {t!r}")

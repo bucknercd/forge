@@ -8,11 +8,21 @@ from typing import Any
 
 from forge.decision_tracker import DecisionTracker
 from forge.design_manager import DesignManager, Milestone
+from forge.execution.file_edits import (
+    apply_insert_after,
+    apply_insert_before,
+    apply_replace_block,
+    apply_replace_text,
+)
 from forge.execution.models import (
     ActionAddDecision,
     ActionAppendSection,
+    ActionInsertAfterInFile,
+    ActionInsertBeforeInFile,
     ActionMarkMilestoneCompleted,
+    ActionReplaceBlockInFile,
     ActionReplaceSection,
+    ActionReplaceTextInFile,
     ActionWriteFile,
     ApplyResult,
     ExecutionPlan,
@@ -39,6 +49,14 @@ def _action_type_name(action: Any) -> str:
         return "mark_milestone_completed"
     if isinstance(action, ActionWriteFile):
         return "write_file"
+    if isinstance(action, ActionInsertAfterInFile):
+        return "insert_after_in_file"
+    if isinstance(action, ActionInsertBeforeInFile):
+        return "insert_before_in_file"
+    if isinstance(action, ActionReplaceTextInFile):
+        return "replace_text_in_file"
+    if isinstance(action, ActionReplaceBlockInFile):
+        return "replace_block_in_file"
     return type(action).__name__
 
 
@@ -62,6 +80,40 @@ class ArtifactActionApplier:
             "milestones": self._paths.MILESTONES_FILE,
         }
         return mapping[target]
+
+    def _read_bounded_file(self, path: Path) -> str:
+        if not path.exists():
+            raise ValueError(f"bounded file action: file not found ({self._rel(path)})")
+        return path.read_text(encoding="utf-8")
+
+    def _apply_bounded_text_edit(
+        self,
+        *,
+        result: ApplyResult,
+        path: Path,
+        action_type: str,
+        before: str,
+        after: str,
+        dry_run: bool,
+        event_bus: Any,
+        extra: dict[str, Any],
+    ) -> None:
+        changed = before != after
+        if changed:
+            if not dry_run:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(after, encoding="utf-8")
+            result.files_changed.append(path)
+        self._append_file_record(
+            result,
+            action_type=action_type,
+            path=path,
+            before=before,
+            after=after if changed else before,
+            changed=changed,
+            extra=extra,
+            event_bus=event_bus,
+        )
 
     def apply(
         self,
@@ -297,6 +349,75 @@ class ArtifactActionApplier:
                 changed=changed,
                 extra={"rel_path": action.rel_path},
                 event_bus=event_bus,
+            )
+            return
+
+        if isinstance(action, ActionInsertAfterInFile):
+            path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
+            before = self._read_bounded_file(path)
+            after = apply_insert_after(before, action.anchor, action.insertion)
+            self._apply_bounded_text_edit(
+                result=result,
+                path=path,
+                action_type="insert_after_in_file",
+                before=before,
+                after=after,
+                dry_run=dry_run,
+                event_bus=event_bus,
+                extra={"rel_path": action.rel_path},
+            )
+            return
+
+        if isinstance(action, ActionInsertBeforeInFile):
+            path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
+            before = self._read_bounded_file(path)
+            after = apply_insert_before(before, action.anchor, action.insertion)
+            self._apply_bounded_text_edit(
+                result=result,
+                path=path,
+                action_type="insert_before_in_file",
+                before=before,
+                after=after,
+                dry_run=dry_run,
+                event_bus=event_bus,
+                extra={"rel_path": action.rel_path},
+            )
+            return
+
+        if isinstance(action, ActionReplaceTextInFile):
+            path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
+            before = self._read_bounded_file(path)
+            after = apply_replace_text(before, action.old_text, action.new_text)
+            self._apply_bounded_text_edit(
+                result=result,
+                path=path,
+                action_type="replace_text_in_file",
+                before=before,
+                after=after,
+                dry_run=dry_run,
+                event_bus=event_bus,
+                extra={"rel_path": action.rel_path},
+            )
+            return
+
+        if isinstance(action, ActionReplaceBlockInFile):
+            path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
+            before = self._read_bounded_file(path)
+            after = apply_replace_block(
+                before,
+                action.start_marker,
+                action.end_marker,
+                action.new_body,
+            )
+            self._apply_bounded_text_edit(
+                result=result,
+                path=path,
+                action_type="replace_block_in_file",
+                before=before,
+                after=after,
+                dry_run=dry_run,
+                event_bus=event_bus,
+                extra={"rel_path": action.rel_path},
             )
             return
 

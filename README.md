@@ -63,6 +63,23 @@ Use `--gate-test-cmd 'pytest -q'` (or similar) to match whatever the LLM milesto
   Allowed prefixes: `examples/`, `src/`, `scripts/`, `tests/`.
 - Validation: `path_file_contains <rel_path> <substring>` (substring is the rest of the line).
 
+**Bounded edits vs `write_file`**
+
+Use **`write_file`** to create or replace a whole file (good for first-cut scaffolding). For smaller, reviewable changes, prefer **bounded** actions. Payloads use a literal separator **` @@FORGE@@ `** (spaces matter) between parts; use `\n` inside parts as usual.
+
+```text
+# After a unique line/snippet (exactly one non-overlapping match in the file):
+insert_after_in_file examples/app.py | return 0 @@FORGE@@ \n    log("ok")\n
+
+# Replace one unique occurrence:
+replace_text_in_file examples/app.py | OLD_TOKEN @@FORGE@@ NEW_TOKEN
+
+# Replace from start of first marker through end of second (start marker must be unique in the file):
+replace_block_in_file examples/config.yaml | --- @@FORGE@@ ... @@FORGE@@ ---\nnew: block\n
+```
+
+If a substring matches **0** or **more than one** non-overlapping time, the action **fails** and apply stops with an error (dry-run/preview still shows the intended diff when the action would succeed).
+
 ---
 
 ## Overview
