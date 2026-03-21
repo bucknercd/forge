@@ -27,8 +27,13 @@ def _two_milestones_body():
 
 def _write_dependency_milestones(path, prereq_incomplete=False):
     prereq_obj = "Prereq objective"
-    prereq_scope = "" if prereq_incomplete else "Prereq scope"
-    prereq_val = "" if prereq_incomplete else "Prereq validation"
+    # Scope/validation must be non-empty for parser; omit forge block when "incomplete".
+    if prereq_incomplete:
+        prereq_scope = "Prereq has no Forge Actions yet (incomplete)."
+        prereq_val = "Execution cannot succeed until actions are defined."
+    else:
+        prereq_scope = "Prereq scope"
+        prereq_val = "Prereq validation"
     prereq_forge = "" if prereq_incomplete else forge_block("FORGE_PREREQ")
 
     path.write_text(

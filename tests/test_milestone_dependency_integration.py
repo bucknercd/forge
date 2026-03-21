@@ -37,8 +37,8 @@ def _write_failed_prereq_milestones(path):
 
 ## Milestone 1: Prerequisite (Will Fail)
 - **Objective**: Prerequisite exists
-- **Scope**:
-- **Validation**:
+- **Scope**: No forge actions — execution/validation will still fail.
+- **Validation**: Observable failure expected for this test.
 
 ## Milestone 2: Dependent
 - **Depends On**: 1

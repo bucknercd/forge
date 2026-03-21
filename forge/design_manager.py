@@ -56,7 +56,18 @@ class MilestoneService:
         for milestone in milestones:
             if not milestone.objective.strip():
                 raise ValueError(
-                    f"Milestone {milestone.id} is missing required objective field."
+                    f"Milestone {milestone.id} is missing required objective field "
+                    "(expected a line like '- **Objective**: <non-empty text>')."
+                )
+            if not milestone.scope.strip():
+                raise ValueError(
+                    f"Milestone {milestone.id} is missing required scope field "
+                    "(expected a line like '- **Scope**: <non-empty text>')."
+                )
+            if not milestone.validation.strip():
+                raise ValueError(
+                    f"Milestone {milestone.id} is missing required validation field "
+                    "(expected a line like '- **Validation**: <non-empty text>')."
                 )
 
     @staticmethod

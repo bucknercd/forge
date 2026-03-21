@@ -14,10 +14,14 @@ from forge.run_event_handlers import EventListCollector, JsonlRunLogHandler
 from forge.run_events import RunEventBus
 from forge.llm import LLMClient
 from forge.vertical_slice import (
+    MILESTONES_DOC_PATH,
     demo_bundle,
+    finalize_llm_milestones_md,
+    generate_bundle_from_llm,
     generate_bundle_from_llm_fixed_vision,
     materialize_bundle,
     read_vision_file_text,
+    repair_llm_milestones_md,
     resolve_vision_file_path,
     run_vertical_slice,
 )
@@ -194,6 +198,78 @@ def test_generate_bundle_from_llm_fixed_vision_uses_file_vision():
     assert bundle.vision == vision
     assert "Requirements" in bundle.requirements_md
     assert "Milestones" in bundle.milestones_md
+
+
+def test_repair_llm_milestones_md_inserts_missing_objective_scope_validation():
+    raw = """# Milestones
+
+## Milestone 1: Thin
+
+- **Forge Actions**:
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains examples/x.py x
+"""
+    fixed, warnings = repair_llm_milestones_md(raw)
+    assert "placeholder" in fixed.lower()
+    assert any("Objective" in w for w in warnings)
+    assert any("Scope" in w for w in warnings)
+    assert any("Validation" in w for w in warnings)
+    MilestoneService.parse_milestones(fixed)
+
+
+def test_repair_llm_milestones_md_keeps_nonempty_fields():
+    raw = """# Milestones
+
+## Milestone 1: Full
+- **Objective**: Real objective.
+- **Scope**: Real scope.
+- **Validation**: Real validation.
+- **Forge Actions**:
+  - mark_milestone_completed
+"""
+    fixed, warnings = repair_llm_milestones_md(raw)
+    assert not warnings
+    assert "Real objective." in fixed
+    m = MilestoneService.parse_milestones(fixed)
+    assert m[0].objective == "Real objective."
+
+
+def test_finalize_llm_milestones_md_error_mentions_docs_path():
+    bad = "# Milestones\n\n## Milestone One\n- **Objective**: x\n"
+    try:
+        finalize_llm_milestones_md(bad)
+    except ValueError as exc:
+        assert MILESTONES_DOC_PATH in str(exc)
+        assert "vertical-slice" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_generate_bundle_from_llm_repairs_partial_milestone():
+    ms = """# Milestones
+
+## Milestone 1: Partial
+
+- **Objective**: Do the thing.
+- **Forge Actions**:
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains examples/x.py x
+"""
+    client = _FakeVerticalSliceLLM(
+        {
+            "vision": "v",
+            "requirements_md": "# R\n",
+            "architecture_md": "# A\n",
+            "milestones_md": ms,
+        }
+    )
+    bundle = generate_bundle_from_llm("idea", client)
+    assert "placeholder" in bundle.milestones_md.lower()
+    m = MilestoneService.parse_milestones(bundle.milestones_md)
+    assert m[0].scope.strip()
+    assert m[0].validation.strip()
 
 
 def test_materialize_demo_bundle_parseable(tmp_path, monkeypatch):

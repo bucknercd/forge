@@ -6,6 +6,7 @@ then run preview → save reviewed plan → apply → gates.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,19 @@ from forge.run_events import (
     as_emitter,
 )
 from forge.vision import VisionManager
+
+# Shown in errors (stable path under Forge project layout).
+MILESTONES_DOC_PATH = "docs/milestones.md"
+
+_PLACEHOLDER_OBJECTIVE = (
+    "_(placeholder — describe the measurable outcome of this milestone.)_"
+)
+_PLACEHOLDER_SCOPE = "_(placeholder — what is in vs out of scope.)_"
+_PLACEHOLDER_VALIDATION = (
+    "_(placeholder — observable checks proving this milestone is done.)_"
+)
+
+_MILESTONE_HEADER_RE = re.compile(r"^##\s+Milestone\s+(\d+)\s*:\s*.+$")
 
 
 @dataclass(frozen=True)
@@ -139,11 +153,157 @@ def materialize_bundle(
     MilestoneService.list_milestones()
 
 
+def _last_nonempty_osv_line(rest: list[str], prefix: str) -> str:
+    """Last non-empty value for a field, matching MilestoneService last-wins overwrite behavior."""
+    last_nonempty = ""
+    for line in rest:
+        st = line.strip()
+        if st.startswith(prefix):
+            tail = line.split(":", 1)[1].strip() if ":" in line else ""
+            if tail:
+                last_nonempty = tail
+    return last_nonempty
+
+
+def _strip_osv_lines_from_rest(rest: list[str]) -> list[str]:
+    out: list[str] = []
+    for line in rest:
+        st = line.strip()
+        if st.startswith(
+            (
+                "- **Objective**:",
+                "- **Scope**:",
+                "- **Validation**:",
+            )
+        ):
+            continue
+        out.append(line)
+    return out
+
+
+def _repair_single_milestone_section(
+    section: list[str], milestone_id: str
+) -> tuple[list[str], list[str]]:
+    warnings: list[str] = []
+    depends: list[str] = []
+    i = 0
+    while i < len(section) and section[i].strip().startswith("- **Depends On**:"):
+        depends.append(section[i])
+        i += 1
+    rest = section[i:]
+    obj = _last_nonempty_osv_line(rest, "- **Objective**:")
+    scope = _last_nonempty_osv_line(rest, "- **Scope**:")
+    val = _last_nonempty_osv_line(rest, "- **Validation**:")
+    other = _strip_osv_lines_from_rest(rest)
+    body: list[str] = []
+    body.extend(depends)
+    if not obj.strip():
+        obj = _PLACEHOLDER_OBJECTIVE
+        warnings.append(
+            f"Milestone {milestone_id}: inserted placeholder Objective (missing or empty)."
+        )
+    if not scope.strip():
+        scope = _PLACEHOLDER_SCOPE
+        warnings.append(
+            f"Milestone {milestone_id}: inserted placeholder Scope (missing or empty)."
+        )
+    if not val.strip():
+        val = _PLACEHOLDER_VALIDATION
+        warnings.append(
+            f"Milestone {milestone_id}: inserted placeholder Validation (missing or empty)."
+        )
+    body.append(f"- **Objective**: {obj}")
+    body.append(f"- **Scope**: {scope}")
+    body.append(f"- **Validation**: {val}")
+    body.extend(other)
+    return body, warnings
+
+
+def repair_llm_milestones_md(md: str) -> tuple[str, list[str]]:
+    """
+    Ensure each ``## Milestone N:`` section has non-empty Objective, Scope, and Validation.
+    Inserts minimal placeholder text when the LLM omitted or emptied a field.
+    Returns ``(repaired_markdown, warning_messages)``.
+    """
+    if not (md or "").strip():
+        return md, []
+    lines = md.splitlines()
+    out: list[str] = []
+    warnings: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        st = line.strip()
+        if st.startswith("## Milestone") and _MILESTONE_HEADER_RE.match(st):
+            m = _MILESTONE_HEADER_RE.match(st)
+            assert m is not None
+            mid = m.group(1)
+            out.append(line)
+            i += 1
+            start = i
+            while i < n:
+                t = lines[i].strip()
+                if t.startswith("## Milestone") and _MILESTONE_HEADER_RE.match(t):
+                    break
+                i += 1
+            section = lines[start:i]
+            fixed, w = _repair_single_milestone_section(section, mid)
+            warnings.extend(w)
+            out.extend(fixed)
+        else:
+            out.append(line)
+            i += 1
+    repaired = "\n".join(out)
+    if md.endswith("\n"):
+        repaired += "\n"
+    return repaired, warnings
+
+
+def finalize_llm_milestones_md(raw_md: str) -> tuple[str, list[str]]:
+    """
+    Repair common LLM omissions, parse, and raise a clear error if still invalid.
+    Returns ``(milestones_md_to_persist, repair_warnings)``.
+    """
+    repaired, repair_warnings = repair_llm_milestones_md(raw_md)
+    try:
+        MilestoneService.parse_milestones(repaired)
+    except ValueError as exc:
+        raise ValueError(
+            f"{exc} See {MILESTONES_DOC_PATH} for the expected milestone shape; fix the "
+            "markdown or re-run `forge vertical-slice` with a clearer idea/vision."
+        ) from exc
+    return repaired, repair_warnings
+
+
+def _milestones_strict_example_block() -> str:
+    return (
+        "STRICT STRUCTURE (non-negotiable):\n"
+        "- EVERY milestone MUST include these three bullets, in this order, IMMEDIATELY after "
+        "any '- **Depends On**:' lines and BEFORE '- **Forge Actions**:'.\n"
+        "- Use EXACTLY these labels (bold markers as shown). NEVER omit, rename, or leave empty.\n"
+        "- **Objective**: one or more sentences: what this milestone delivers.\n"
+        "- **Scope**: boundaries, tech constraints, files/areas touched.\n"
+        "- **Validation**: how you will verify the milestone is complete (observable checks).\n\n"
+        "STRICT EXAMPLE (mirror this structure for Milestone 1 and any further milestones):\n"
+        "# Milestones\n\n"
+        "## Milestone 1: Example title\n"
+        "- **Objective**: Ship a minimal runnable example under examples/.\n"
+        "- **Scope**: Single module; stdlib only; no new dependencies.\n"
+        "- **Validation**: Example file exists, runs with exit code 0, and contains the entrypoint.\n"
+        "- **Forge Actions**:\n"
+        "  - write_file examples/example_app.py | def main():\\n    print('ok')\\n\n"
+        "  - mark_milestone_completed\n"
+        "- **Forge Validation**:\n"
+        "  - path_file_contains examples/example_app.py def main\n\n"
+    )
+
+
 def _milestones_rules_block() -> str:
     return (
-        "Rules for milestones_md:\n"
+        _milestones_strict_example_block()
+        + "Additional rules for milestones_md:\n"
         "- Start with '# Milestones' then '## Milestone 1: <title>'.\n"
-        "- Include bullet fields: Objective, Scope, Validation.\n"
         "- Include '- **Forge Actions**:' with one or more actions using ONLY:\n"
         "  append_section, replace_section, write_file, insert_after_in_file, insert_before_in_file,\n"
         "  replace_text_in_file, replace_block_in_file, replace_lines_in_file, add_decision, mark_milestone_completed\n"
@@ -241,13 +401,13 @@ def generate_bundle_from_llm(idea: str, client: LLMClient) -> VerticalSliceBundl
     data = _parse_vertical_slice_json(
         raw, required_keys=("vision", "requirements_md", "architecture_md", "milestones_md")
     )
+    milestones_md, _mw = finalize_llm_milestones_md(str(data["milestones_md"]))
     bundle = VerticalSliceBundle(
         vision=str(data["vision"]),
         requirements_md=str(data["requirements_md"]),
         architecture_md=str(data["architecture_md"]),
-        milestones_md=str(data["milestones_md"]),
+        milestones_md=milestones_md,
     )
-    MilestoneService.parse_milestones(bundle.milestones_md)
     return bundle
 
 
@@ -260,13 +420,13 @@ def generate_bundle_from_llm_fixed_vision(vision_text: str, client: LLMClient) -
     data = _parse_vertical_slice_json(
         raw, required_keys=("requirements_md", "architecture_md", "milestones_md")
     )
+    milestones_md, _mw = finalize_llm_milestones_md(str(data["milestones_md"]))
     bundle = VerticalSliceBundle(
         vision=vision_text.strip(),
         requirements_md=str(data["requirements_md"]),
         architecture_md=str(data["architecture_md"]),
-        milestones_md=str(data["milestones_md"]),
+        milestones_md=milestones_md,
     )
-    MilestoneService.parse_milestones(bundle.milestones_md)
     return bundle
 
 

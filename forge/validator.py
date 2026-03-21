@@ -4,6 +4,15 @@ from forge.design_manager import MilestoneService
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.validation_rules import validate_all_rules
 
+_MILESTONES_DOC = "docs/milestones.md"
+
+
+def _milestones_fix_hint() -> str:
+    return (
+        f" Update {_MILESTONES_DOC} for this milestone, or re-run "
+        "`forge vertical-slice` / `forge milestone-synthesize` with clearer input."
+    )
+
 
 class Validator:
     @staticmethod
@@ -56,24 +65,31 @@ class Validator:
         ):
             return False, (
                 f"Milestone {milestone_id} objective/scope/validation fields "
-                "must be non-empty."
+                f"must be non-empty (expected lines like '- **Objective**: …' in "
+                f"{_MILESTONES_DOC}).{_milestones_fix_hint()}"
             )
 
         if not milestone.forge_actions:
             return False, (
                 f"Milestone {milestone_id} has no Forge Actions. "
-                "Add a '- **Forge Actions**:' block with deterministic actions."
+                f"Add a '- **Forge Actions**:' block with deterministic actions in "
+                f"{_MILESTONES_DOC}.{_milestones_fix_hint()}"
             )
 
         if milestone.forge_actions and not milestone.forge_validation:
             return False, (
-                f"Milestone {milestone_id} has Forge Actions but no Forge Validation rules."
+                f"Milestone {milestone_id} has Forge Actions but no Forge Validation rules. "
+                f"Add a '- **Forge Validation**:' block in {_MILESTONES_DOC}."
+                f"{_milestones_fix_hint()}"
             )
 
         try:
             rules = ExecutionPlanBuilder.parse_validation_rules(milestone)
         except ValueError as exc:
-            return False, f"Invalid Forge Validation for milestone {milestone_id}: {exc}"
+            return False, (
+                f"Invalid Forge Validation for milestone {milestone_id}: {exc} "
+                f"(check {_MILESTONES_DOC}).{_milestones_fix_hint()}"
+            )
 
         ok, reason = validate_all_rules(rules, Paths)
         if not ok:

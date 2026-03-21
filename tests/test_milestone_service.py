@@ -146,10 +146,38 @@ def test_multiple_milestones_parse_deterministically():
 
 ## Milestone 1: First
 - **Objective**: O1
+- **Scope**: S1
+- **Validation**: V1
 
 ## Milestone 2: Second
 - **Objective**: O2
+- **Scope**: S2
+- **Validation**: V2
 """
     milestones = MilestoneService.parse_milestones(content)
     assert [m.id for m in milestones] == [1, 2]
     assert [m.title for m in milestones] == ["Milestone 1: First", "Milestone 2: Second"]
+
+
+def test_missing_scope_detected():
+    content = """# Milestones
+
+## Milestone 1: Missing Scope
+- **Objective**: Test objective.
+- **Validation**: Test validation.
+"""
+    with pytest.raises(ValueError) as exc:
+        MilestoneService.parse_milestones(content)
+    assert "scope" in str(exc.value).lower()
+
+
+def test_missing_validation_detected():
+    content = """# Milestones
+
+## Milestone 1: Missing Validation
+- **Objective**: Test objective.
+- **Scope**: Test scope.
+"""
+    with pytest.raises(ValueError) as exc:
+        MilestoneService.parse_milestones(content)
+    assert "validation" in str(exc.value).lower()

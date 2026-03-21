@@ -62,8 +62,8 @@ def test_execute_milestone_failure(tmp_path):
 
 ## Milestone 1: First Task
 - **Objective**: Exists
-- **Scope**: 
-- **Validation**: 
+- **Scope**: Has scope text so milestone parses; still no Forge Actions below.
+- **Validation**: Validation text present.
 """,
     )
 
