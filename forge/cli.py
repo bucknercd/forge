@@ -28,6 +28,13 @@ from forge.policy_config import (
     merge_reviewed_apply_policy,
 )
 from forge.planner_resolver import resolve_planner
+from forge.llm_resolve import resolve_llm_client_from_policy
+from forge.policy_config import load_planner_policy
+from forge.milestone_synthesis import (
+    accept_synthesized_milestones,
+    load_synthesized_milestones,
+    synthesize_milestones,
+)
 
 
 def _review_enforcement_status(planner, policy, *, save_plan: bool) -> dict:
@@ -644,6 +651,76 @@ class ForgeCLI:
                 print(f"- {f}")
         return True
 
+    @staticmethod
+    def milestone_synthesize(desired_count: int, json_mode: bool = False) -> bool:
+        planner_policy, err = load_planner_policy()
+        if err:
+            payload = {"ok": False, "message": err}
+            if json_mode:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(err)
+            return False
+        llm_client, llm_err = resolve_llm_client_from_policy(planner_policy)
+        if llm_err:
+            payload = {"ok": False, "message": llm_err}
+            if json_mode:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(llm_err)
+            return False
+        assert llm_client is not None
+        try:
+            payload = synthesize_milestones(llm_client, desired_count=desired_count)
+        except ValueError as exc:
+            payload = {"ok": False, "message": str(exc)}
+            if json_mode:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(str(exc))
+            return False
+        payload["ok"] = True
+        if json_mode:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return True
+        print(f"Synthesized milestone artifact: {payload.get('synthesis_id')}")
+        print("Review proposed milestones:")
+        print(payload.get("markdown_preview", "").rstrip())
+        for w in payload.get("warnings", []):
+            print(f"Warning: {w}")
+        print(f"Use: forge milestone-synthesis-accept {payload.get('synthesis_id')}")
+        return True
+
+    @staticmethod
+    def milestone_synthesis_show(synthesis_id: str, json_mode: bool = False) -> bool:
+        payload = load_synthesized_milestones(synthesis_id)
+        if payload is None:
+            msg = f"Synthesized milestone artifact '{synthesis_id}' not found."
+            if json_mode:
+                print(json.dumps({"ok": False, "message": msg}, indent=2, sort_keys=True))
+            else:
+                print(msg)
+            return False
+        payload["ok"] = True
+        if json_mode:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return True
+        print(f"Synthesized milestone artifact: {synthesis_id}")
+        print(payload.get("markdown_preview", "").rstrip())
+        return True
+
+    @staticmethod
+    def milestone_synthesis_accept(synthesis_id: str, json_mode: bool = False) -> bool:
+        payload = accept_synthesized_milestones(synthesis_id)
+        if json_mode:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return bool(payload.get("ok"))
+        if not payload.get("ok"):
+            print(payload.get("message", "Failed to accept synthesized milestones."))
+            return False
+        print(payload.get("message", "Accepted synthesized milestones."))
+        return True
+
 def main() -> int:
     Paths.refresh()
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
@@ -739,6 +816,30 @@ def main() -> int:
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     subparsers.add_parser("execute-next", help="Execute the next eligible milestone")
+    synthesis_parser = subparsers.add_parser(
+        "milestone-synthesize", help="Generate reviewed milestone proposals from repo context"
+    )
+    synthesis_parser.add_argument(
+        "--count", type=int, default=3, help="Desired maximum number of synthesized milestones"
+    )
+    synthesis_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    synthesis_show_parser = subparsers.add_parser(
+        "milestone-synthesis-show", help="Show synthesized milestone artifact"
+    )
+    synthesis_show_parser.add_argument("synthesis_id", type=str, help="Synthesis artifact ID")
+    synthesis_show_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    synthesis_accept_parser = subparsers.add_parser(
+        "milestone-synthesis-accept",
+        help="Accept reviewed synthesized milestones into docs/milestones.md",
+    )
+    synthesis_accept_parser.add_argument("synthesis_id", type=str, help="Synthesis artifact ID")
+    synthesis_accept_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
 
     args = parser.parse_args()
 
@@ -803,6 +904,12 @@ def main() -> int:
         return 0 if ForgeCLI.milestone_lint(args.id, json_mode=args.json) else 1
     elif args.command == "execute-next":
         ForgeCLI.execute_next()
+    elif args.command == "milestone-synthesize":
+        return 0 if ForgeCLI.milestone_synthesize(args.count, json_mode=args.json) else 1
+    elif args.command == "milestone-synthesis-show":
+        return 0 if ForgeCLI.milestone_synthesis_show(args.synthesis_id, json_mode=args.json) else 1
+    elif args.command == "milestone-synthesis-accept":
+        return 0 if ForgeCLI.milestone_synthesis_accept(args.synthesis_id, json_mode=args.json) else 1
     else:
         parser.print_help()
     return 0

@@ -193,4 +193,26 @@ This enables iterative, state-aware project progression.
 - `OpenAIChatClient` is the first real provider-backed implementation; additional providers can be added behind the same interface.
 
 
-## Next TODO
+## Next TODOs
+
+1. Strengthen quality and trust checks for synthesized milestones
+   - add lightweight quality checks for synthesized milestones before review
+   - flag weak milestones with vague objective, scope, or validation text
+   - detect redundancy against existing milestones
+   - surface clear review warnings in human-readable and JSON output
+   - keep synthesized milestones review-first and never directly active
+
+2. Add an end-to-end guarded workflow command
+   - support a higher-level flow such as:
+     synthesize milestones -> review/save plan -> apply -> run gates
+   - preserve human review and policy enforcement
+   - keep execution deterministic even when planning is non-deterministic
+
+3. Improve code-oriented artifact execution
+   - expand bounded actions to better support code and config edits
+   - keep file mutation structured and reviewable
+   - avoid unconstrained free-form file rewriting
+
+4. Add end-to-end regression coverage for full LLM workflows
+   - test milestone synthesis, reviewed-plan flows, gates, and failure handling with mocked provider responses
+   - ensure LLM-assisted paths remain safe and repeatable under test
