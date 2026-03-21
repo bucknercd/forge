@@ -176,15 +176,15 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add planner selection through CLI and repo policy.
+Add real provider-backed LLM planner configuration.
 
-- allow planner mode selection for preview and reviewed-plan save workflows
+- introduce a real LLM client interface and provider-backed implementation
+- support provider configuration through repo policy and environment variables
 - keep deterministic planning as the default
-- support repo-configured planner defaults
-- support explicit CLI overrides for planner mode
-- fail clearly when an LLM planner is selected but not configured
-- preserve existing bounded-plan validation and reviewed-plan safety controls
-- keep planner choice separate from execution/apply behavior
+- keep stub LLM support for tests and local development
+- fail clearly when LLM mode is selected but provider credentials/config are missing
+- preserve bounded action validation for all LLM-produced plans
+- keep LLM planning routed through preview, reviewed-plan, stale-check, and gate workflows
 
 Goal:
-Make optional LLM-assisted planning usable through normal Forge workflows without changing deterministic defaults.
+Make optional LLM-assisted planning usable with a real provider while preserving deterministic defaults and safety controls.

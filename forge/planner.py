@@ -31,6 +31,7 @@ class LLMPlanner(Planner):
     llm_client: LLMClient
     mode: str = "llm"
     stable_for_recheck: bool = False
+    fallback_to_milestone_actions: bool = True
 
     def build_plan(self, milestone: Milestone) -> ExecutionPlan:
         prompt = (
@@ -57,7 +58,10 @@ class LLMPlanner(Planner):
             raise ValueError("LLM planner output must be a JSON object.")
         actions_raw = parsed.get("actions")
         if not isinstance(actions_raw, list):
-            raise ValueError("LLM planner output must include an 'actions' array.")
+            if self.fallback_to_milestone_actions and milestone.forge_actions:
+                actions_raw = list(milestone.forge_actions)
+            else:
+                raise ValueError("LLM planner output must include an 'actions' array.")
 
         actions = []
         for idx, item in enumerate(actions_raw, start=1):

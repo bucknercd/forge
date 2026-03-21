@@ -20,6 +20,12 @@ class ReviewedApplyPolicy:
     test_output_max_chars: int = DEFAULT_TEST_OUTPUT_MAX_CHARS
 
 
+@dataclass(frozen=True)
+class PlannerPolicy:
+    mode: str = "deterministic"  # deterministic | llm
+    llm_client: str | None = None  # currently supported: "stub"
+
+
 def policy_file_path() -> Path:
     return Paths.BASE_DIR / "forge-policy.json"
 
@@ -66,6 +72,38 @@ def load_reviewed_apply_policy() -> tuple[ReviewedApplyPolicy, str | None]:
         test_timeout_seconds=timeout,
         test_output_max_chars=max_chars,
     ), None
+
+
+def load_planner_policy() -> tuple[PlannerPolicy, str | None]:
+    """
+    Load optional planner defaults from repo policy.
+    """
+    path = policy_file_path()
+    if not path.exists():
+        return PlannerPolicy(), None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return PlannerPolicy(), f"Invalid policy JSON in {path}: {exc}"
+    if not isinstance(data, dict):
+        return PlannerPolicy(), f"Invalid policy file {path}: top-level must be an object."
+
+    section = data.get("planner", {})
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        return PlannerPolicy(), f"Invalid policy file {path}: 'planner' must be an object."
+    try:
+        mode = _get_mode(section, "mode", default="deterministic")
+        llm_client = _get_opt_str(section, "llm_client", default=None)
+    except ValueError as exc:
+        return PlannerPolicy(), f"Invalid policy file {path}: {exc}"
+    return PlannerPolicy(mode=mode, llm_client=llm_client), None
+
+
+def merge_planner_policy(base: PlannerPolicy, *, mode_override: str | None) -> PlannerPolicy:
+    mode = mode_override or base.mode
+    return PlannerPolicy(mode=mode, llm_client=base.llm_client)
 
 
 def merge_reviewed_apply_policy(
@@ -125,3 +163,10 @@ def _get_positive_int(data: dict[str, Any], key: str, *, default: int) -> int:
     if isinstance(val, int) and val > 0:
         return val
     raise ValueError(f"'{key}' must be a positive integer.")
+
+
+def _get_mode(data: dict[str, Any], key: str, *, default: str) -> str:
+    val = data.get(key, default)
+    if isinstance(val, str) and val in {"deterministic", "llm"}:
+        return val
+    raise ValueError(f"'{key}' must be one of: deterministic, llm.")

@@ -27,6 +27,7 @@ from forge.policy_config import (
     load_reviewed_apply_policy,
     merge_reviewed_apply_policy,
 )
+from forge.planner_resolver import resolve_planner
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -403,20 +404,52 @@ class ForgeCLI:
 
     @staticmethod
     def milestone_preview(
-        milestone_id: int | None = None, json_mode: bool = False, save_plan: bool = False
+        milestone_id: int | None = None,
+        json_mode: bool = False,
+        save_plan: bool = False,
+        planner_mode: str | None = None,
     ):
         """Dry-run preview of milestone execution (no writes)."""
+        planner, planner_err = resolve_planner(mode_override=planner_mode)
+        if planner_err:
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_preview_result(
+                            {"ok": False, "message": planner_err, "errors": [planner_err]}
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(planner_err)
+            return
+
         if save_plan and milestone_id is None:
-            result = Executor.preview_next()
+            result = Executor.preview_next() if planner and planner.mode == "deterministic" else None
+            if result is None:
+                result = {"ok": False, "message": "Save-plan without milestone ID requires deterministic planner."}
             if result.get("ok") and result.get("milestone_id") is not None:
-                result = Executor.save_reviewed_plan_for_milestone(result["milestone_id"])
+                result = Executor.save_reviewed_plan_for_milestone(
+                    result["milestone_id"], planner=planner
+                )
         elif save_plan:
-            result = Executor.save_reviewed_plan_for_milestone(milestone_id)
+            result = Executor.save_reviewed_plan_for_milestone(
+                milestone_id, planner=planner
+            )
         else:
             if milestone_id is None:
-                result = Executor.preview_next()
+                if planner and planner.mode == "deterministic":
+                    result = Executor.preview_next()
+                else:
+                    # For non-deterministic planners, require explicit milestone id
+                    result = {
+                        "ok": False,
+                        "message": "Previewing next milestone with non-deterministic planner requires explicit milestone ID.",
+                    }
             else:
-                result = Executor.preview_milestone(milestone_id)
+                result = Executor.preview_milestone(milestone_id, planner=planner)
         if json_mode:
             print(json.dumps(serialize_preview_result(result), indent=2, sort_keys=True))
             return
@@ -586,6 +619,11 @@ def main() -> int:
         "id", nargs="?", type=int, help="Optional milestone ID to preview"
     )
     milestone_preview_parser.add_argument(
+        "--planner",
+        choices=["deterministic", "llm"],
+        help="Override planner mode for this preview/save-plan command",
+    )
+    milestone_preview_parser.add_argument(
         "--save-plan", action="store_true", help="Persist a reviewed plan artifact for later apply"
     )
     milestone_preview_parser.add_argument(
@@ -676,7 +714,12 @@ def main() -> int:
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
     elif args.command == "milestone-preview":
-        ForgeCLI.milestone_preview(args.id, json_mode=args.json, save_plan=args.save_plan)
+        ForgeCLI.milestone_preview(
+            args.id,
+            json_mode=args.json,
+            save_plan=args.save_plan,
+            planner_mode=args.planner,
+        )
     elif args.command == "milestone-apply-plan":
         gate_validate_override = (
             True
