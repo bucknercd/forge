@@ -82,6 +82,44 @@ class ExecutionPlan:
                 out.append({"type": "mark_milestone_completed"})
         return {"milestone_id": self.milestone_id, "actions": out}
 
+    @staticmethod
+    def from_serializable(data: dict[str, Any]) -> "ExecutionPlan":
+        milestone_id = int(data.get("milestone_id"))
+        actions_raw = data.get("actions", [])
+        actions: list[ForgeAction] = []
+        for item in actions_raw:
+            t = item.get("type")
+            if t == "append_section":
+                actions.append(
+                    ActionAppendSection(
+                        target=item["target"],
+                        section_heading=item["section_heading"],
+                        body=item["body"],
+                    )
+                )
+            elif t == "replace_section":
+                actions.append(
+                    ActionReplaceSection(
+                        target=item["target"],
+                        section_heading=item["section_heading"],
+                        body=item["body"],
+                    )
+                )
+            elif t == "add_decision":
+                actions.append(
+                    ActionAddDecision(
+                        title=item["title"],
+                        context=item["context"],
+                        decision=item["decision"],
+                        rationale=item["rationale"],
+                    )
+                )
+            elif t == "mark_milestone_completed":
+                actions.append(ActionMarkMilestoneCompleted())
+            else:
+                raise ValueError(f"Unknown action type in stored plan: {t!r}")
+        return ExecutionPlan(milestone_id=milestone_id, actions=actions)
+
 
 @dataclass
 class ApplyResult:

@@ -17,7 +17,11 @@ from forge.milestone_sync import sync_milestone_state
 from forge.milestone_state import normalize_milestone_state_value
 from forge.project_status import analyze_project_status
 from forge.execution.plan import ExecutionPlanBuilder
-from forge.cli_output import serialize_lint_result, serialize_preview_result
+from forge.cli_output import (
+    serialize_apply_plan_result,
+    serialize_lint_result,
+    serialize_preview_result,
+)
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -393,12 +397,21 @@ class ForgeCLI:
             print(f"Milestone ID: {milestone_id}")
 
     @staticmethod
-    def milestone_preview(milestone_id: int | None = None, json_mode: bool = False):
+    def milestone_preview(
+        milestone_id: int | None = None, json_mode: bool = False, save_plan: bool = False
+    ):
         """Dry-run preview of milestone execution (no writes)."""
-        if milestone_id is None:
+        if save_plan and milestone_id is None:
             result = Executor.preview_next()
+            if result.get("ok") and result.get("milestone_id") is not None:
+                result = Executor.save_reviewed_plan_for_milestone(result["milestone_id"])
+        elif save_plan:
+            result = Executor.save_reviewed_plan_for_milestone(milestone_id)
         else:
-            result = Executor.preview_milestone(milestone_id)
+            if milestone_id is None:
+                result = Executor.preview_next()
+            else:
+                result = Executor.preview_milestone(milestone_id)
         if json_mode:
             print(json.dumps(serialize_preview_result(result), indent=2, sort_keys=True))
             return
@@ -410,6 +423,8 @@ class ForgeCLI:
         print(
             f"Preview Milestone: {result['milestone_id']}. {result.get('title', '')}"
         )
+        if result.get("plan_id"):
+            print(f"Reviewed Plan ID: {result['plan_id']}")
         print(f"Artifact Summary: {result.get('artifact_summary', '')}")
         files = result.get("files_changed", [])
         print("Targeted Artifacts:")
@@ -431,6 +446,25 @@ class ForgeCLI:
                 print("   diff:")
                 for line in diff.splitlines():
                     print(f"     {line}")
+
+    @staticmethod
+    def milestone_apply_plan(plan_id: str, json_mode: bool = False) -> bool:
+        result = Executor.apply_reviewed_plan(plan_id)
+        if json_mode:
+            print(json.dumps(serialize_apply_plan_result(result), indent=2, sort_keys=True))
+            return bool(result.get("ok"))
+        if not result.get("ok"):
+            print(result.get("message", "Failed to apply reviewed plan."))
+            return False
+        print(f"Applied reviewed plan: {result.get('plan_id')}")
+        print(f"Milestone: {result.get('milestone_id')}. {result.get('title', '')}")
+        print(f"Artifact Summary: {result.get('artifact_summary', '')}")
+        files = result.get("files_changed", [])
+        if files:
+            print("Changed Artifacts:")
+            for f in files:
+                print(f"- {f}")
+        return True
 
 def main() -> int:
     Paths.refresh()
@@ -469,6 +503,16 @@ def main() -> int:
         "id", nargs="?", type=int, help="Optional milestone ID to preview"
     )
     milestone_preview_parser.add_argument(
+        "--save-plan", action="store_true", help="Persist a reviewed plan artifact for later apply"
+    )
+    milestone_preview_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    milestone_apply_plan_parser = subparsers.add_parser(
+        "milestone-apply-plan", help="Apply a previously reviewed milestone plan"
+    )
+    milestone_apply_plan_parser.add_argument("plan_id", type=str, help="Reviewed plan ID")
+    milestone_apply_plan_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     milestone_lint_parser = subparsers.add_parser(
@@ -518,7 +562,9 @@ def main() -> int:
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
     elif args.command == "milestone-preview":
-        ForgeCLI.milestone_preview(args.id, json_mode=args.json)
+        ForgeCLI.milestone_preview(args.id, json_mode=args.json, save_plan=args.save_plan)
+    elif args.command == "milestone-apply-plan":
+        return 0 if ForgeCLI.milestone_apply_plan(args.plan_id, json_mode=args.json) else 1
     elif args.command == "milestone-lint":
         return 0 if ForgeCLI.milestone_lint(args.id, json_mode=args.json) else 1
     elif args.command == "execute-next":

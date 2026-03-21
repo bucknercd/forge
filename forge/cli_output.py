@@ -29,12 +29,30 @@ def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "command": "milestone-preview",
         "ok": bool(payload.get("ok", False)),
+        "plan_id": payload.get("plan_id"),
+        "plan_file": payload.get("plan_file"),
         "milestone_id": payload.get("milestone_id"),
         "title": payload.get("title"),
         "message": payload.get("message", ""),
         "artifact_summary": payload.get("artifact_summary", ""),
         "targeted_artifacts": payload.get("files_changed", []),
         "planned_actions": payload.get("execution_plan", {}).get("actions", []),
+        "actions_applied": payload.get("actions_applied", []),
+        "errors": payload.get("errors", []),
+        "summary_counts": _summary_counts(payload.get("actions_applied", [])),
+    }
+
+
+def serialize_apply_plan_result(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "command": "milestone-apply-plan",
+        "ok": bool(payload.get("ok", False)),
+        "plan_id": payload.get("plan_id"),
+        "milestone_id": payload.get("milestone_id"),
+        "title": payload.get("title"),
+        "message": payload.get("message", ""),
+        "artifact_summary": payload.get("artifact_summary", ""),
+        "targeted_artifacts": payload.get("files_changed", []),
         "actions_applied": payload.get("actions_applied", []),
         "errors": payload.get("errors", []),
         "summary_counts": _summary_counts(payload.get("actions_applied", [])),

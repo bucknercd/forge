@@ -13,6 +13,11 @@ from forge.milestone_state import MilestoneStateRepository
 from forge.execution.models import ActionAddDecision, ApplyResult, ExecutionPlan
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.apply import ArtifactActionApplier
+from forge.reviewed_plan import (
+    load_reviewed_plan,
+    save_reviewed_plan,
+    validate_reviewed_plan,
+)
 
 MAX_RETRIES = 2
 
@@ -118,6 +123,23 @@ class Executor:
         }
 
     @staticmethod
+    def save_reviewed_plan_for_milestone(milestone_id: int) -> dict:
+        preview = Executor.preview_milestone(milestone_id)
+        if not preview.get("ok"):
+            return preview
+        try:
+            milestone = MilestoneService.get_milestone(milestone_id)
+            if not milestone:
+                return {"ok": False, "message": "Invalid milestone ID."}
+            plan = ExecutionPlan.from_serializable(preview["execution_plan"])
+            payload = save_reviewed_plan(milestone_id, milestone.title, plan)
+            preview["plan_id"] = payload["plan_id"]
+            preview["plan_file"] = str((Paths.SYSTEM_DIR / "reviewed_plans" / f"{payload['plan_id']}.json"))
+            return preview
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "message": f"Failed to save reviewed plan: {exc}"}
+
+    @staticmethod
     def preview_next() -> dict:
         """
         Preview next eligible milestone without executing or mutating state.
@@ -142,6 +164,43 @@ class Executor:
                 "message": "Progress is blocked by failed/unmet prerequisites.",
             }
         return Executor.preview_milestone(next_milestone.id)
+
+    @staticmethod
+    def apply_reviewed_plan(plan_id: str) -> dict:
+        payload = load_reviewed_plan(plan_id)
+        if payload is None:
+            return {"ok": False, "message": f"Reviewed plan '{plan_id}' not found."}
+
+        milestone_id = int(payload.get("milestone_id"))
+        try:
+            milestone = MilestoneService.get_milestone(milestone_id)
+        except ValueError as exc:
+            return {"ok": False, "message": f"Milestone definition error: {exc}"}
+        if not milestone:
+            return {"ok": False, "message": "Milestone for reviewed plan no longer exists."}
+
+        try:
+            current_plan = ExecutionPlanBuilder.build(milestone)
+        except ValueError as exc:
+            return {"ok": False, "message": f"Current milestone plan invalid: {exc}"}
+
+        ok, reason = validate_reviewed_plan(payload, current_plan)
+        if not ok:
+            return {"ok": False, "message": reason, "plan_id": plan_id, "milestone_id": milestone_id}
+
+        reviewed_plan = ExecutionPlan.from_serializable(payload["plan"])
+        applier = ArtifactActionApplier(Paths)
+        apply_result = applier.apply(reviewed_plan, milestone, dry_run=False)
+        return {
+            "ok": len(apply_result.errors) == 0,
+            "plan_id": plan_id,
+            "milestone_id": milestone_id,
+            "title": milestone.title,
+            "artifact_summary": apply_result.human_summary(),
+            "files_changed": apply_result.normalized_files_changed(),
+            "actions_applied": apply_result.actions_applied,
+            "errors": apply_result.errors,
+        }
 
     @staticmethod
     def _execute_milestone_internal(milestone_id: int) -> None:
