@@ -13,6 +13,7 @@ from forge.milestone_state import MilestoneStateRepository
 from forge.execution.models import ActionAddDecision, ApplyResult, ExecutionPlan
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.apply import ArtifactActionApplier
+from forge.gate_runner import run_gates_for_milestone, summarize_gate_results
 from forge.reviewed_plan import (
     load_reviewed_plan,
     save_reviewed_plan,
@@ -167,6 +168,19 @@ class Executor:
 
     @staticmethod
     def apply_reviewed_plan(plan_id: str) -> dict:
+        return Executor.apply_reviewed_plan_with_gates(
+            plan_id,
+            run_validation_gate=False,
+            test_command=None,
+        )
+
+    @staticmethod
+    def apply_reviewed_plan_with_gates(
+        plan_id: str,
+        *,
+        run_validation_gate: bool,
+        test_command: str | None,
+    ) -> dict:
         payload = load_reviewed_plan(plan_id)
         if payload is None:
             return {"ok": False, "message": f"Reviewed plan '{plan_id}' not found."}
@@ -191,15 +205,84 @@ class Executor:
         reviewed_plan = ExecutionPlan.from_serializable(payload["plan"])
         applier = ArtifactActionApplier(Paths)
         apply_result = applier.apply(reviewed_plan, milestone, dry_run=False)
-        return {
-            "ok": len(apply_result.errors) == 0,
-            "plan_id": plan_id,
-            "milestone_id": milestone_id,
+        # Persist a milestone result artifact so optional validation gate can
+        # reuse the existing Validator contract.
+        result_dir = Paths.SYSTEM_DIR / "results"
+        result_dir.mkdir(parents=True, exist_ok=True)
+        milestone_result_file = result_dir / f"milestone_{milestone_id}.json"
+        milestone_result_payload = {
+            "id": milestone_id,
             "title": milestone.title,
+            "summary": _build_execution_summary(len(reviewed_plan.actions), apply_result),
             "artifact_summary": apply_result.human_summary(),
             "files_changed": apply_result.normalized_files_changed(),
             "actions_applied": apply_result.actions_applied,
+            "execution_plan": reviewed_plan.to_serializable(),
+            "apply_errors": apply_result.errors,
+        }
+        with milestone_result_file.open("w", encoding="utf-8") as file:
+            json.dump(milestone_result_payload, file, indent=4)
+        gates = run_gates_for_milestone(
+            milestone_id,
+            run_validation_gate=run_validation_gate,
+            test_command=test_command,
+        )
+        gates_ok = all(g.get("ok") for g in gates) if gates else True
+        apply_ok = len(apply_result.errors) == 0
+        ok_final = apply_ok and gates_ok
+        gate_summary = summarize_gate_results(gates)
+        artifact_summary = apply_result.human_summary()
+
+        result_payload = {
+            "kind": "reviewed_plan_apply",
+            "plan_id": plan_id,
+            "milestone_id": milestone_id,
+            "title": milestone.title,
+            "ok": ok_final,
+            "apply_ok": apply_ok,
+            "gates_ok": gates_ok,
+            "artifact_summary": artifact_summary,
+            "gate_summary": gate_summary,
+            "gate_results": gates,
+            "files_changed": apply_result.normalized_files_changed(),
+            "actions_applied": apply_result.actions_applied,
             "errors": apply_result.errors,
+        }
+        safe_id = plan_id.replace("/", "_")
+        reviewed_result_file = result_dir / f"reviewed_apply_{safe_id}.json"
+        with reviewed_result_file.open("w", encoding="utf-8") as file:
+            json.dump(result_payload, file, indent=4)
+
+        status = "success" if ok_final else "failure"
+        err = None
+        if not apply_ok:
+            err = "; ".join(apply_result.errors)
+        elif not gates_ok:
+            failed_msgs = [g.get("message", "") for g in gates if not g.get("ok")]
+            err = "; ".join(failed_msgs) or "Post-apply gate failure."
+        RunHistory.log_milestone_attempt(
+            milestone_id=milestone_id,
+            milestone_title=milestone.title,
+            status=status,
+            error_message=err,
+            artifact_summary=f"{artifact_summary}; gates: {gate_summary}",
+        )
+
+        return {
+            "ok": ok_final,
+            "apply_ok": apply_ok,
+            "gates_ok": gates_ok,
+            "plan_id": plan_id,
+            "milestone_id": milestone_id,
+            "title": milestone.title,
+            "artifact_summary": artifact_summary,
+            "gate_summary": gate_summary,
+            "gate_results": gates,
+            "files_changed": apply_result.normalized_files_changed(),
+            "actions_applied": apply_result.actions_applied,
+            "errors": apply_result.errors,
+            "result_artifact": str(reviewed_result_file),
+            "message": "" if ok_final else (err or "Reviewed plan apply failed."),
         }
 
     @staticmethod

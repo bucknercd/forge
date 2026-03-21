@@ -448,17 +448,30 @@ class ForgeCLI:
                     print(f"     {line}")
 
     @staticmethod
-    def milestone_apply_plan(plan_id: str, json_mode: bool = False) -> bool:
-        result = Executor.apply_reviewed_plan(plan_id)
+    def milestone_apply_plan(
+        plan_id: str,
+        json_mode: bool = False,
+        gate_validate: bool = False,
+        gate_test_cmd: str | None = None,
+    ) -> bool:
+        result = Executor.apply_reviewed_plan_with_gates(
+            plan_id,
+            run_validation_gate=gate_validate,
+            test_command=gate_test_cmd,
+        )
         if json_mode:
             print(json.dumps(serialize_apply_plan_result(result), indent=2, sort_keys=True))
             return bool(result.get("ok"))
         if not result.get("ok"):
             print(result.get("message", "Failed to apply reviewed plan."))
+            if result.get("gate_summary"):
+                print(f"Gates: {result['gate_summary']}")
             return False
         print(f"Applied reviewed plan: {result.get('plan_id')}")
         print(f"Milestone: {result.get('milestone_id')}. {result.get('title', '')}")
         print(f"Artifact Summary: {result.get('artifact_summary', '')}")
+        if result.get("gate_summary"):
+            print(f"Gates: {result.get('gate_summary')}")
         files = result.get("files_changed", [])
         if files:
             print("Changed Artifacts:")
@@ -513,6 +526,16 @@ def main() -> int:
     )
     milestone_apply_plan_parser.add_argument("plan_id", type=str, help="Reviewed plan ID")
     milestone_apply_plan_parser.add_argument(
+        "--gate-validate",
+        action="store_true",
+        help="Run milestone validation gate after apply",
+    )
+    milestone_apply_plan_parser.add_argument(
+        "--gate-test-cmd",
+        type=str,
+        help="Run explicit repository test command gate after apply",
+    )
+    milestone_apply_plan_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     milestone_lint_parser = subparsers.add_parser(
@@ -564,7 +587,12 @@ def main() -> int:
     elif args.command == "milestone-preview":
         ForgeCLI.milestone_preview(args.id, json_mode=args.json, save_plan=args.save_plan)
     elif args.command == "milestone-apply-plan":
-        return 0 if ForgeCLI.milestone_apply_plan(args.plan_id, json_mode=args.json) else 1
+        return 0 if ForgeCLI.milestone_apply_plan(
+            args.plan_id,
+            json_mode=args.json,
+            gate_validate=args.gate_validate,
+            gate_test_cmd=args.gate_test_cmd,
+        ) else 1
     elif args.command == "milestone-lint":
         return 0 if ForgeCLI.milestone_lint(args.id, json_mode=args.json) else 1
     elif args.command == "execute-next":

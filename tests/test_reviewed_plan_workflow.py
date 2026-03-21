@@ -112,3 +112,119 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
     apply_payload = json.loads(capsys.readouterr().out)
     assert apply_payload["ok"] is True
     assert apply_payload["plan_id"] == plan_id
+
+
+def test_apply_reviewed_plan_with_validation_gate_fail(tmp_path):
+    configure_project(
+        tmp_path,
+        f"""
+# Milestones
+
+## Milestone 1: Gate Validation Fail
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+{forge_block("GATE_VALID_FAIL")}
+""",
+    )
+    preview = Executor.save_reviewed_plan_for_milestone(1)
+    plan_id = preview["plan_id"]
+
+    # Break validation rule after review while keeping plan applyable.
+    Paths.MILESTONES_FILE.write_text(
+        """
+# Milestones
+
+## Milestone 1: Gate Validation Fail
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+- **Forge Actions**:
+  - append_section requirements Overview | GATE_VALID_FAIL
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements SOMETHING_ELSE
+""",
+        encoding="utf-8",
+    )
+    # Plan mismatch due to changed milestones hash would block earlier.
+    # Re-save reviewed plan against updated milestones, then force validation failure via rule.
+    preview2 = Executor.save_reviewed_plan_for_milestone(1)
+    plan_id2 = preview2["plan_id"]
+    res = Executor.apply_reviewed_plan_with_gates(
+        plan_id2, run_validation_gate=True, test_command=None
+    )
+    assert res["ok"] is False
+    assert res["apply_ok"] is True
+    assert res["gates_ok"] is False
+    assert "milestone_validation=fail" in res["gate_summary"]
+    result_artifact = Paths.SYSTEM_DIR / "results" / f"reviewed_apply_{plan_id2}.json"
+    assert result_artifact.exists()
+    payload = json.loads(result_artifact.read_text(encoding="utf-8"))
+    assert payload["gates_ok"] is False
+    assert payload["gate_results"]
+
+
+def test_apply_reviewed_plan_with_test_gate_fail(tmp_path):
+    configure_project(
+        tmp_path,
+        f"""
+# Milestones
+
+## Milestone 1: Gate Test Fail
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+{forge_block("GATE_TEST_FAIL")}
+""",
+    )
+    preview = Executor.save_reviewed_plan_for_milestone(1)
+    plan_id = preview["plan_id"]
+    res = Executor.apply_reviewed_plan_with_gates(
+        plan_id,
+        run_validation_gate=False,
+        test_command="python -c \"import sys; sys.exit(3)\"",
+    )
+    assert res["ok"] is False
+    assert res["apply_ok"] is True
+    assert res["gates_ok"] is False
+    assert "repo_test_command=fail" in res["gate_summary"]
+
+
+def test_cli_apply_plan_json_includes_gate_results(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    assert main() == 0
+    _ = capsys.readouterr().out
+    (tmp_path / "docs" / "milestones.md").write_text(
+        f"""
+# Milestones
+
+## Milestone 1: CLI Gate JSON
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+{forge_block("CLI_GATE_JSON")}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--save-plan", "--json"])
+    assert main() == 0
+    plan_id = json.loads(capsys.readouterr().out)["plan_id"]
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "forge",
+            "milestone-apply-plan",
+            plan_id,
+            "--gate-test-cmd",
+            "python -c \"print('ok')\"",
+            "--json",
+        ],
+    )
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "milestone-apply-plan"
+    assert payload["apply_ok"] is True
+    assert "gate_results" in payload

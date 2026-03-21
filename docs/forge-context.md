@@ -176,15 +176,17 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add an approval/apply workflow for milestone execution.
+Add repo-configured policy defaults for reviewed-plan workflows.
 
-- support generating a previewed execution plan that can be explicitly approved before apply
-- allow applying a specific reviewed plan instead of regenerating execution implicitly
-- keep approval/apply deterministic and file-based
-- preserve existing execution behavior for direct runs
-- ensure applied plans match reviewed plans
-- surface clear errors when a plan is stale or invalid
-- keep JSON and human-readable output support for the workflow
+- introduce a repo config file for Forge policy and command defaults
+- allow configuration of reviewed-plan apply defaults such as:
+  - whether validation gate should run by default
+  - default test command
+  - timeout / output limits for test gates
+- keep CLI flags able to override config explicitly
+- preserve current behavior when no config is present
+- keep configuration deterministic and file-based
+- surface clear diagnostics for invalid config
 
 Goal:
-Make milestone execution safer and more intentional by separating preview from apply.
+Make Forge safer and easier to use consistently across a repository without hardcoding workflow policy into commands.
