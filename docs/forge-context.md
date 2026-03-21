@@ -197,27 +197,20 @@ This enables iterative, state-aware project progression.
 
 ### Active TODO
 
-1. Add an end-to-end guarded workflow command
-   - support a higher-level flow such as:
-     synthesize milestones -> review/save plan -> apply -> run gates
-   - preserve human review and policy enforcement
-   - keep execution deterministic even when planning is non-deterministic
-   - ensure each step remains inspectable and debuggable
-
-### Upcoming TODOs
-
-2. Improve code-oriented artifact execution
+1. Improve code-oriented artifact execution
    - expand bounded actions to better support code and config edits
    - support common code transformations safely (insert, replace, update blocks)
    - keep file mutation structured, minimal, and reviewable
    - avoid unconstrained full-file rewrites
 
-3. Add end-to-end regression coverage for full LLM workflows
+### Upcoming TODOs
+
+2. Add end-to-end regression coverage for full LLM workflows
    - test milestone synthesis → plan → preview → apply → gates
    - use mocked LLM responses for deterministic testing
    - ensure failure modes remain safe and predictable
 
-4. Improve LLM plan and milestone quality heuristics
+3. Improve LLM plan and milestone quality heuristics
    - refine weak-text detection heuristics
    - improve redundancy detection beyond simple token overlap
    - optionally introduce scoring or ranking for generated outputs

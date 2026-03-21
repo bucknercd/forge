@@ -731,6 +731,172 @@ class ForgeCLI:
             print(f"Quality warning: {w}")
         return True
 
+    @staticmethod
+    def workflow_guarded(
+        *,
+        synthesize: bool,
+        synthesis_count: int,
+        accept_synthesized: bool,
+        synthesis_id: str | None,
+        milestone_id: int | None,
+        planner_mode: str | None,
+        apply_plan: bool,
+        json_mode: bool,
+        gate_validate: bool | None,
+        gate_test_cmd: str | None,
+        disable_gate_test_cmd: bool,
+        gate_test_timeout_seconds: int | None,
+        gate_test_output_max_chars: int | None,
+    ) -> bool:
+        stages: list[dict] = []
+        latest_synthesis_id: str | None = None
+        latest_plan_id: str | None = None
+
+        if synthesize:
+            planner_policy, err = load_planner_policy()
+            if err:
+                stage = {"stage": "synthesize", "ok": False, "message": err}
+                stages.append(stage)
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=latest_synthesis_id, plan_id=latest_plan_id
+                )
+            llm_client, llm_err = resolve_llm_client_from_policy(planner_policy)
+            if llm_err:
+                stage = {"stage": "synthesize", "ok": False, "message": llm_err}
+                stages.append(stage)
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=latest_synthesis_id, plan_id=latest_plan_id
+                )
+            assert llm_client is not None
+            try:
+                synth_payload = synthesize_milestones(llm_client, desired_count=synthesis_count)
+                latest_synthesis_id = synth_payload.get("synthesis_id")
+                stages.append(
+                    {
+                        "stage": "synthesize",
+                        "ok": True,
+                        "synthesis_id": latest_synthesis_id,
+                        "warnings": synth_payload.get("warnings", []),
+                        "quality_warnings": synth_payload.get("quality_warnings", []),
+                        "message": "Synthesized reviewed milestone artifact.",
+                    }
+                )
+            except ValueError as exc:
+                stages.append({"stage": "synthesize", "ok": False, "message": str(exc)})
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=latest_synthesis_id, plan_id=latest_plan_id
+                )
+
+        chosen_synthesis_id = synthesis_id or latest_synthesis_id
+        if accept_synthesized:
+            if not chosen_synthesis_id:
+                stages.append(
+                    {
+                        "stage": "accept_synthesized",
+                        "ok": False,
+                        "message": "No synthesis artifact ID available. Use --synthesis-id or --synthesize.",
+                    }
+                )
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=latest_synthesis_id, plan_id=latest_plan_id
+                )
+            accept_payload = accept_synthesized_milestones(chosen_synthesis_id)
+            stages.append({"stage": "accept_synthesized", **accept_payload})
+            if not accept_payload.get("ok"):
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                )
+
+        if milestone_id is not None:
+            planner, planner_policy, planner_err = resolve_planner(mode_override=planner_mode)
+            if planner_err:
+                stages.append({"stage": "preview_save_plan", "ok": False, "message": planner_err})
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                )
+            assert planner is not None
+            enforcement = _review_enforcement_status(planner, planner_policy, save_plan=True)
+            preview = Executor.save_reviewed_plan_for_milestone(
+                milestone_id, planner=planner, review_enforcement=enforcement
+            )
+            stages.append({"stage": "preview_save_plan", **preview})
+            if not preview.get("ok"):
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                )
+            latest_plan_id = preview.get("plan_id")
+
+            if apply_plan:
+                if not latest_plan_id:
+                    stages.append(
+                        {
+                            "stage": "apply_plan",
+                            "ok": False,
+                            "message": "No reviewed plan ID available from preview/save phase.",
+                        }
+                    )
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+                base_policy, policy_err = load_reviewed_apply_policy()
+                if policy_err:
+                    stages.append({"stage": "apply_plan", "ok": False, "message": policy_err})
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+                resolved_policy: ReviewedApplyPolicy = merge_reviewed_apply_policy(
+                    base_policy,
+                    gate_validate=gate_validate,
+                    test_command=gate_test_cmd,
+                    disable_test_command=disable_gate_test_cmd,
+                    test_timeout_seconds=gate_test_timeout_seconds,
+                    test_output_max_chars=gate_test_output_max_chars,
+                )
+                apply_res = Executor.apply_reviewed_plan_with_gates(
+                    latest_plan_id,
+                    run_validation_gate=resolved_policy.run_validation_gate,
+                    test_command=resolved_policy.test_command,
+                    test_timeout_seconds=resolved_policy.test_timeout_seconds,
+                    test_output_max_chars=resolved_policy.test_output_max_chars,
+                )
+                stages.append({"stage": "apply_plan", **apply_res})
+                if not apply_res.get("ok"):
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+
+        return ForgeCLI._print_workflow_result(
+            stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+        )
+
+    @staticmethod
+    def _print_workflow_result(
+        stages: list[dict], *, json_mode: bool, synthesis_id: str | None, plan_id: str | None
+    ) -> bool:
+        ok = all(bool(s.get("ok")) for s in stages) if stages else True
+        payload = {
+            "command": "workflow-guarded",
+            "ok": ok,
+            "synthesis_id": synthesis_id,
+            "plan_id": plan_id,
+            "stages": stages,
+        }
+        if json_mode:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return ok
+        print("Guarded workflow:")
+        for s in stages:
+            status = "OK" if s.get("ok") else "FAIL"
+            print(f"- [{status}] {s.get('stage')}")
+            msg = s.get("message")
+            if msg:
+                print(f"  {msg}")
+            if s.get("synthesis_id"):
+                print(f"  synthesis_id={s.get('synthesis_id')}")
+            if s.get("plan_id"):
+                print(f"  plan_id={s.get('plan_id')}")
+        return ok
+
 def main() -> int:
     Paths.refresh()
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
@@ -850,6 +1016,79 @@ def main() -> int:
     synthesis_accept_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
+    workflow_parser = subparsers.add_parser(
+        "workflow-guarded", help="Run explicit guarded synthesis->plan->apply workflow"
+    )
+    workflow_parser.add_argument(
+        "--synthesize",
+        action="store_true",
+        help="Run milestone synthesis phase first",
+    )
+    workflow_parser.add_argument(
+        "--synthesis-count",
+        type=int,
+        default=3,
+        help="Desired maximum synthesized milestones when --synthesize is used",
+    )
+    workflow_parser.add_argument(
+        "--accept-synthesized",
+        action="store_true",
+        help="Accept synthesized milestone artifact into docs/milestones.md",
+    )
+    workflow_parser.add_argument(
+        "--synthesis-id",
+        type=str,
+        help="Existing synthesis artifact ID to accept",
+    )
+    workflow_parser.add_argument(
+        "--milestone-id",
+        type=int,
+        help="Milestone ID to preview/save plan for",
+    )
+    workflow_parser.add_argument(
+        "--planner",
+        choices=["deterministic", "llm"],
+        help="Override planner mode for preview/save phase",
+    )
+    workflow_parser.add_argument(
+        "--apply-plan",
+        action="store_true",
+        help="Apply reviewed plan after preview/save phase",
+    )
+    wf_gate_validate_group = workflow_parser.add_mutually_exclusive_group()
+    wf_gate_validate_group.add_argument(
+        "--gate-validate",
+        action="store_true",
+        help="Run validation gate when --apply-plan is used",
+    )
+    wf_gate_validate_group.add_argument(
+        "--no-gate-validate",
+        action="store_true",
+        help="Disable validation gate when --apply-plan is used",
+    )
+    workflow_parser.add_argument(
+        "--gate-test-cmd",
+        type=str,
+        help="Run repository test command gate when --apply-plan is used",
+    )
+    workflow_parser.add_argument(
+        "--no-gate-test-cmd",
+        action="store_true",
+        help="Disable configured repository test command gate when --apply-plan is used",
+    )
+    workflow_parser.add_argument(
+        "--gate-test-timeout-seconds",
+        type=int,
+        help="Override test gate timeout when --apply-plan is used",
+    )
+    workflow_parser.add_argument(
+        "--gate-test-output-max-chars",
+        type=int,
+        help="Override test gate output size when --apply-plan is used",
+    )
+    workflow_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
 
     args = parser.parse_args()
 
@@ -920,6 +1159,25 @@ def main() -> int:
         return 0 if ForgeCLI.milestone_synthesis_show(args.synthesis_id, json_mode=args.json) else 1
     elif args.command == "milestone-synthesis-accept":
         return 0 if ForgeCLI.milestone_synthesis_accept(args.synthesis_id, json_mode=args.json) else 1
+    elif args.command == "workflow-guarded":
+        wf_gate_validate_override = (
+            True if args.gate_validate else False if args.no_gate_validate else None
+        )
+        return 0 if ForgeCLI.workflow_guarded(
+            synthesize=args.synthesize,
+            synthesis_count=args.synthesis_count,
+            accept_synthesized=args.accept_synthesized,
+            synthesis_id=args.synthesis_id,
+            milestone_id=args.milestone_id,
+            planner_mode=args.planner,
+            apply_plan=args.apply_plan,
+            json_mode=args.json,
+            gate_validate=wf_gate_validate_override,
+            gate_test_cmd=args.gate_test_cmd,
+            disable_gate_test_cmd=args.no_gate_test_cmd,
+            gate_test_timeout_seconds=args.gate_test_timeout_seconds,
+            gate_test_output_max_chars=args.gate_test_output_max_chars,
+        ) else 1
     else:
         parser.print_help()
     return 0
