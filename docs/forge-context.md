@@ -199,6 +199,7 @@ End-to-end flow is available via `forge vertical-slice`:
 
 - `--demo`: deterministic bundle (todo CLI under `examples/`), no LLM for docs
 - `--idea "..."`: LLM-generated vision + specs + milestones (requires `forge-policy.json` LLM client)
+- `--vision-file PATH` / `--from-vision` (`docs/vision.txt`): vision text from file is authoritative; LLM generates requirements, architecture, and milestones only (same LLM client requirement)
 
 Pipeline:
 materialize docs -> save reviewed plan -> apply -> validation gates

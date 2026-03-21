@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from forge.execution.apply import ArtifactActionApplier
 from forge.execution.parse import parse_forge_action_line, parse_forge_validation_line
 from forge.execution.plan import ExecutionPlanBuilder
@@ -10,7 +12,27 @@ from forge.design_manager import Milestone, MilestoneService
 from forge.paths import Paths
 from forge.run_event_handlers import EventListCollector, JsonlRunLogHandler
 from forge.run_events import RunEventBus
-from forge.vertical_slice import demo_bundle, materialize_bundle, run_vertical_slice
+from forge.llm import LLMClient
+from forge.vertical_slice import (
+    demo_bundle,
+    generate_bundle_from_llm_fixed_vision,
+    materialize_bundle,
+    read_vision_file_text,
+    resolve_vision_file_path,
+    run_vertical_slice,
+)
+
+
+class _FakeVerticalSliceLLM(LLMClient):
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def generate(self, prompt: str) -> str:
+        return json.dumps(self._payload)
+
+    @property
+    def client_id(self) -> str:
+        return "fake"
 
 
 def test_parse_write_file_unescapes_newlines():
@@ -117,6 +139,61 @@ def test_vertical_slice_emits_core_events_to_jsonl(tmp_path, monkeypatch):
     assert "plan_saved" in types
     assert "action_applied" in types
     assert "run_completed" in types
+
+
+def test_read_vision_file_text_missing(tmp_path):
+    p = tmp_path / "nope.txt"
+    try:
+        read_vision_file_text(p)
+    except FileNotFoundError as exc:
+        assert "Vision file does not exist" in str(exc)
+    else:
+        raise AssertionError("expected FileNotFoundError")
+
+
+def test_read_vision_file_text_empty(tmp_path):
+    p = tmp_path / "v.txt"
+    p.write_text("  \n\t  ", encoding="utf-8")
+    try:
+        read_vision_file_text(p)
+    except ValueError as exc:
+        assert "empty" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_resolve_vision_file_path_relative_to_base(tmp_path):
+    assert resolve_vision_file_path("sub/x.txt", base_dir=tmp_path) == (
+        tmp_path / "sub" / "x.txt"
+    ).resolve()
+
+
+def test_generate_bundle_from_llm_fixed_vision_uses_file_vision():
+    vision = "AUTHORITATIVE multi\nline vision."
+    ms = """# Milestones
+
+## Milestone 1: One
+
+- **Objective**: x
+- **Scope**: y
+- **Validation**: z
+
+- **Forge Actions**:
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains examples/x.py x
+"""
+    client = _FakeVerticalSliceLLM(
+        {
+            "requirements_md": "# Requirements\n\nok\n",
+            "architecture_md": "# Architecture\n\nok\n",
+            "milestones_md": ms,
+        }
+    )
+    bundle = generate_bundle_from_llm_fixed_vision(vision, client)
+    assert bundle.vision == vision
+    assert "Requirements" in bundle.requirements_md
+    assert "Milestones" in bundle.milestones_md
 
 
 def test_materialize_demo_bundle_parseable(tmp_path, monkeypatch):

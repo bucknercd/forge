@@ -1,14 +1,46 @@
 # Forge
 
-Forge is a **spec-driven CLI** that turns ideas into working systems.
+Forge is a **spec-driven CLI** that turns **ideas into milestones into code**—**the coherent, validated code that working systems are built from**.
 
-It uses LLMs to generate milestones and code, while enforcing **review, validation, and reproducibility**.
+You start with intent—a short phrase on the command line, a long vision in a file, or the built-in demo. Forge (optionally with an LLM) turns that into **`docs/` specs** and **`docs/milestones.md`**: structured milestones whose **Forge Actions** describe concrete file edits and whose **Forge Validation** rules define how to check the result. A **planner** turns the next milestone into an **execution plan**; Forge **applies** it under **gates** (validation rules + optional test command). The loop repeats until the pieces **fit together as a system** you can trust—not just files on disk, but **behavior that holds up under checks**.
+
+**In one sentence:** *idea → vision & specs → milestones → plan → applied code → validation → a working system.*
+
+---
+
+## The pipeline
+
+```text
+Your idea (CLI text, vision file, or demo)
+        │
+        ▼
+docs/   vision.txt · requirements.md · architecture.md · milestones.md
+        │
+        ▼
+Milestones   (markdown: objectives + Forge Actions + Forge Validation)
+        │
+        ▼
+Plan         (reviewed, saved under .system/reviewed_plans/)
+        │
+        ▼
+Apply        (write_file, bounded edits, append_section, …)
+        │
+        ▼
+Gates        (Forge Validation + optional repo test command)
+        │
+        ▼
+Working system — code + updated specs, validated
+```
+
+**`forge vertical-slice`** runs the full slice in one go: materialize or refresh docs from the idea → preview/save plan for milestone 1 → apply → gates. **`forge milestone-*`** commands let you walk the same path step by step on an existing repo.
 
 ---
 
 ## Quick Start (vertical slice)
 
 Reproduce the full loop **vision → requirements/architecture → milestones → plan → apply → validation** without writing policy by hand using the built-in demo:
+
+**LLM vs demo:** `--demo` needs **no API key** and no `forge-policy.json`. Anything that generates docs from your idea (`--idea`, `--from-vision`, `--vision-file`) needs an **LLM client** in policy plus credentials in the environment—see **[Using an LLM (OpenAI)](#using-an-llm-openai)** below.
 
 ```bash
 mkdir forge-demo && cd forge-demo
@@ -47,15 +79,71 @@ which should print a line like `Added todo: buy milk`.
 forge vertical-slice --demo --json
 ```
 
-**Your own idea (LLM)**
+### Using an LLM (OpenAI)
 
-Configure `forge-policy.json` → `planner.llm_client` (e.g. `openai` with `FORGE_OPENAI_API_KEY` or `OPENAI_API_KEY` set). Then:
+Forge’s supported remote provider today is **OpenAI** (`planner.llm_client`: `"openai"`). Other `llm_client` values may be added later; for now this is what you use for real `--idea` / vision-file flows. **`stub`** is for offline tests and does not return usable vertical-slice JSON for real projects.
+
+1. **Create `forge-policy.json`** in your project root (same directory you run `forge` from). `forge init` does **not** create this file—you add it when you want LLM features.
+
+   Minimal example for vertical slice and LLM-backed planning:
+
+   ```json
+   {
+     "planner": {
+       "mode": "llm",
+       "llm_client": "openai",
+       "llm_model": "gpt-4o-mini"
+     }
+   }
+   ```
+
+   - **`llm_model`** is optional; if omitted, Forge defaults to **`gpt-4o-mini`**.
+   - **Do not put API keys in this file.** Keys belong only in the environment.
+
+2. **Set your OpenAI API key** in the shell (or your IDE/CI secrets) before running Forge:
+
+   ```bash
+   export FORGE_OPENAI_API_KEY="sk-..."   # Forge-specific (recommended)
+   # or
+   export OPENAI_API_KEY="sk-..."
+   ```
+
+   Optional: **`FORGE_OPENAI_BASE_URL`** — override the API base URL (defaults to OpenAI’s endpoint; useful for compatible proxies).
+
+3. **Run vertical slice** with an idea:
+
+   ```bash
+   forge vertical-slice --idea "Small FastAPI service with a /health route"
+   ```
+
+   Use `--gate-test-cmd 'pytest -q'` (or similar) to match whatever the LLM milestone expects.
+
+**Voice → file → Forge (long-form vision)**
+
+For longer ideas, dictation, or iteration in an editor, put the vision in a file instead of the CLI. Forge uses that text as the **source of truth** for `docs/vision.txt` and asks the LLM only for requirements, architecture, and milestones (vision is **not** regenerated).
+
+1. Paste or write your vision into `docs/vision.txt` (after `forge init`).
+2. Run:
 
 ```bash
-forge vertical-slice --idea "Small FastAPI service with a /health route"
+forge vertical-slice --from-vision
 ```
 
-Use `--gate-test-cmd 'pytest -q'` (or similar) to match whatever the LLM milestone expects.
+Or use any path:
+
+```bash
+forge vertical-slice --vision-file path/to/my-vision.txt
+```
+
+**Precedence** if you pass more than one input: `--idea` wins, then `--vision-file`, then `--from-vision`. Do not combine `--demo` with those flags. Forge fails with a clear message if the vision file is missing or empty (whitespace-only counts as empty).
+
+| Mode | What you provide | What Forge does with vision |
+|------|------------------|-----------------------------|
+| `--demo` | Nothing (built-in todo example) | Writes all docs deterministically; no LLM |
+| `--idea "…"` | Short text on the CLI | LLM generates vision + requirements + architecture + milestones |
+| `--vision-file` / `--from-vision` | Long text in a file | **Your file is the vision**; LLM generates only requirements, architecture, milestones |
+
+All non-demo modes need **`planner.llm_client`** set in `forge-policy.json` (typically **`openai`** plus an API key in the environment, as above—or **`stub`** only for automated tests).
 
 **Bounded file writes**
 
@@ -94,176 +182,18 @@ Optional trailing segment: ` | occurrence=2 must_be_unique=false line_match=true
 
 ---
 
-## Overview
+## Concepts
 
-Forge follows a spec-driven workflow:
+**Specs (`docs/`)** are the source of truth: vision, requirements, architecture, decisions, and milestones. You can author them by hand, or let **`forge vertical-slice`** (with LLM) populate them from an idea or a vision file.
 
-```text
-Idea
-→ Vision
-→ Specs (requirements, architecture)
-→ Milestones (LLM-generated)
-→ Implementation Plan
-→ Code + Tests
-→ Validation + Feedback Loop
-→ Working System
-```
+**Milestones** live in `docs/milestones.md` as Markdown sections. Each milestone has narrative fields (objective, scope, validation) plus machine-readable lines:
 
-Forge is not just code generation.
+- **Forge Actions** — declarative edits (`write_file`, `append_section`, bounded patches, …) that the executor applies in order.
+- **Forge Validation** — checks (`path_file_contains`, `file_contains`, …) that must pass after apply.
 
-It is a **system compiler**:
+The **planner** (deterministic or LLM-backed, per `forge-policy.json`) reads the milestone and produces a concrete **plan**. Important plans are **reviewed and saved** before apply so execution is traceable.
 
-* specs define intent
-* LLMs generate work
-* Forge enforces correctness
-
----
-
-## How Forge Works
-
-```text
-Idea
-  │
-  ▼
-Vision
-  │
-  ▼
-Specs
-(requirements, architecture)
-  │
-  ▼
-LLM Synthesis
-(milestones + plans + code)
-  │
-  ▼
-Execution Engine (Forge)
-  │
-  ├── Generate code
-  ├── Run tests
-  ├── Apply changes
-  │
-  ▼
-Validation Gates
-  │
-  ├── pass → commit + next milestone
-  └── fail → feedback loop
-                │
-                ▼
-         LLM refinement
-                │
-                └───────────────┐
-                                ▼
-                          retry execution
-```
----
-
-## What Forge Does
-
-* Converts ideas into structured specs
-* Generates milestones using LLMs
-* Produces implementation plans
-* Generates code and tests
-* Applies changes through validation gates
-* Iterates until the system passes validation
-
----
-
-## Core Model
-
-Forge separates responsibilities:
-
-| Layer | Responsibility                   |
-| ----- | -------------------------------- |
-| Idea  | Human input                      |
-| Specs | Source of truth                  |
-| LLM   | Generate milestones, plans, code |
-| Forge | Execute, validate, track state   |
-
----
-
-## From Idea to Specs
-
-Start with an idea:
-
-```text
-Build a CLI tool that prints "hello world"
-```
-
-Forge turns this into structured specs:
-
-* `vision.txt`
-* `requirements.md`
-* `architecture.md`
-
-These become the foundation for all work.
-
----
-
-## Milestone Generation (LLM)
-
-Forge uses LLMs to generate milestones from specs:
-
-```json
-{
-  "id": "M1",
-  "objective": "Implement CLI hello command",
-  "derived_from": ["REQ-1"],
-  "tasks": [
-    "create CLI entrypoint",
-    "implement hello command",
-    "add unit tests"
-  ]
-}
-```
-
-Milestones are:
-
-* structured
-* traceable to specs
-* reviewed before execution
-
----
-
-## Code Generation + Execution
-
-Each milestone produces:
-
-* file changes
-* code
-* tests
-
-Forge executes through a plan:
-
-```text
-- create forge/cli.py
-- implement hello command
-- add tests/test_cli.py
-- run pytest
-```
-
----
-
-## Validation + Feedback Loop
-
-Forge enforces validation before applying changes:
-
-* run tests
-* enforce timeouts
-* check outputs
-
-If validation fails:
-
-```text
-fail → refine → regenerate → retry
-```
-
-This creates a loop:
-
-```text
-generate → test → fix → repeat
-```
-
-Until the system passes.
+**Execution** is deterministic: Forge does what the saved plan says, then runs **gates**. Failure stops the run with a clear reason; you fix specs, milestones, or code and try again—there is no hidden auto-retry in the engine itself (orchestration like `workflow-guarded` can combine multiple steps).
 
 ---
 
@@ -279,24 +209,38 @@ pip install -e .
 
 ---
 
-## Usage
+## Common commands
+
+**End-to-end (one command)**
 
 ```bash
+forge vertical-slice --demo
+forge vertical-slice --idea "Your short idea"
+forge vertical-slice --from-vision          # uses docs/vision.txt
+forge vertical-slice --vision-file ./notes/vision.txt
+```
+
+**Incremental (existing repo)**
+
+```bash
+forge status
+forge milestone-list
 forge milestone-next
-forge milestone-preview --milestone-id 1
-forge milestone-apply-plan --milestone-id 1
+forge milestone-preview 1                  # optional: milestone id
+forge milestone-preview 1 --save-plan      # persist reviewed plan
+forge milestone-apply-plan <plan_id>       # apply saved plan + gates
+forge execute-next
 ```
 
 ---
 
 ## Enable LLM
 
-```bash
-export OPENAI_API_KEY=your_key_here
-```
+Use the same **`forge-policy.json`** and **OpenAI environment variables** as in [Quick Start → Using an LLM (OpenAI)](#using-an-llm-openai). Then you can use LLM mode outside vertical slice, for example:
 
 ```bash
-forge milestone-preview --milestone-id 1 --planner llm
+forge milestone-preview 1 --planner llm
+forge milestone-synthesize
 ```
 
 ---
@@ -305,33 +249,28 @@ forge milestone-preview --milestone-id 1 --planner llm
 
 ```bash
 forge workflow-guarded \
+  --milestone-id 1 \
   --synthesize \
   --apply-plan \
   --gate-test-cmd "pytest"
 ```
 
-This performs:
-
-1. milestone generation (LLM)
-2. review + acceptance
-3. plan generation
-4. execution with validation
+Chains optional **milestone synthesis** (LLM), **preview/save plan** for a milestone, and **apply with gates**. Use `--accept-synthesized` / `--synthesis-id` when you want synthesized proposals merged into `docs/milestones.md` (see `forge workflow-guarded --help`).
 
 ---
 
 ## Validation Gates
 
-Forge enforces safety:
+After apply, Forge can run:
 
-* test execution (`pytest`)
-* timeout limits
-* output limits
+* **Forge Validation** rules from the milestone (file/section/path checks)
+* **Repository test command** (e.g. `pytest`), with timeout and captured output limits
 
-Example:
+Example (apply an existing reviewed plan by id):
 
 ```bash
 forge milestone-apply-plan \
-  --milestone-id 1 \
+  <plan_id> \
   --gate-test-cmd "pytest" \
   --gate-test-timeout-seconds 60
 ```
@@ -340,30 +279,28 @@ forge milestone-apply-plan \
 
 ## Project Layout
 
-* `docs/` — specs (source of truth)
-* `forge/` — engine (CLI, planner, executor, validator)
-* `tests/` — validation
-* `.system/` — generated state
+* `docs/` — specs (source of truth): vision, requirements, architecture, decisions, milestones
+* `forge/` — engine (CLI, planner, executor, validation)
+* `tests/` — Forge’s own test suite (your app tests live where your milestones put them)
+* `.system/` — reviewed plans, run history, etc.
+* `.forge/` — per-run logs (`runs/<run_id>/events.jsonl`, `run_meta.json`)
+* `forge-policy.json` — planner mode, LLM client, apply/gate defaults (repo root)
 
 ---
 
-## Design Principles
+## Design principles
 
-* Spec-driven — specs define all work
-* LLM-first generation — milestones and code are synthesized
-* Deterministic execution — reproducible by default
-* Validation before apply — no unsafe changes
-* Explicit state — everything persisted
+* **Spec-driven** — `docs/` define intent and executable milestones
+* **LLM-assisted** — optional for drafting specs, milestones, and LLM-backed plans; `--demo` and deterministic planners stay predictable
+* **Deterministic execution** — given a saved plan, apply behavior is reproducible
+* **Validation around apply** — Forge Validation + optional test command
+* **Explicit state** — reviewed plans, run history, and run logs on disk
 
 ---
 
 ## Summary
 
-Forge is a:
-
-> **Spec-driven system generator with LLM-assisted planning and built-in validation**
-
-It turns structured intent into working, validated software.
+Forge is a **spec-driven path from ideas to code to systems**: specs and milestones stay human- and machine-readable, the LLM can help draft them when you want, and Forge **executes and validates** so what lands in the repo is **real code** that **composes into a working system**—aligned with what you reviewed and proven by gates.
 
 ---
 

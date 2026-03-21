@@ -44,7 +44,11 @@ from forge.run_event_handlers import (
     write_run_meta,
 )
 from forge.run_events import RunEventBus
-from forge.vertical_slice import run_vertical_slice
+from forge.vertical_slice import (
+    read_vision_file_text,
+    resolve_vision_file_path,
+    run_vertical_slice,
+)
 
 
 def _review_enforcement_status(planner, policy, *, save_plan: bool) -> dict:
@@ -884,6 +888,7 @@ class ForgeCLI:
         *,
         demo: bool,
         idea: str | None,
+        fixed_vision: str | None = None,
         milestone_id: int = 1,
         planner_mode: str | None = None,
         gate_validate: bool | None = None,
@@ -894,7 +899,7 @@ class ForgeCLI:
         json_mode: bool = False,
         verbose: bool = False,
     ) -> bool:
-        """Idea → docs → reviewed plan → apply → validation gates (see `forge vertical-slice`)."""
+        """Idea / vision file → docs → reviewed plan → apply → validation gates (see `forge vertical-slice`)."""
         run_id = uuid.uuid4().hex[:12]
         run_dir = Paths.forge_run_dir(run_id)
         events_path = run_dir / "events.jsonl"
@@ -903,13 +908,21 @@ class ForgeCLI:
         if not json_mode:
             handlers.insert(0, CliProgressHandler(verbose=verbose))
         bus = RunEventBus(run_id, handlers)
+        if demo:
+            input_mode = "demo"
+        elif fixed_vision is not None:
+            input_mode = "vision_file"
+        else:
+            input_mode = "idea"
         write_run_meta(
             run_dir,
             {
                 "run_id": run_id,
                 "command": "vertical-slice",
                 "demo": demo,
+                "input_mode": input_mode,
                 "idea_provided": idea is not None,
+                "fixed_vision_provided": fixed_vision is not None,
                 "milestone_id": milestone_id,
                 "verbose": verbose,
                 "json_mode": json_mode,
@@ -918,6 +931,7 @@ class ForgeCLI:
         payload = run_vertical_slice(
             demo=demo,
             idea=idea,
+            fixed_vision=fixed_vision,
             milestone_id=milestone_id,
             planner_mode=planner_mode,
             gate_validate=gate_validate,
@@ -1162,18 +1176,29 @@ def main() -> int:
         "vertical-slice",
         help="End-to-end: write vision/specs/milestones, save reviewed plan, apply, run gates",
     )
-    vs_mode = vertical_slice_parser.add_mutually_exclusive_group(required=True)
-    vs_mode.add_argument(
+    vertical_slice_parser.add_argument(
         "--demo",
         action="store_true",
         help="Use built-in todo CLI example (no LLM for docs)",
     )
-    vs_mode.add_argument(
+    vertical_slice_parser.add_argument(
         "--idea",
         type=str,
         default=None,
         metavar="TEXT",
-        help="Generate docs from an idea via LLM (requires forge-policy.json LLM client)",
+        help="Generate vision + docs from a short idea via LLM (highest precedence vs file vision)",
+    )
+    vertical_slice_parser.add_argument(
+        "--vision-file",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Load vision from this file; LLM generates requirements, architecture, milestones only",
+    )
+    vertical_slice_parser.add_argument(
+        "--from-vision",
+        action="store_true",
+        help="Load vision from docs/vision.txt (same LLM behavior as --vision-file)",
     )
     vertical_slice_parser.add_argument(
         "--milestone-id",
@@ -1322,18 +1347,57 @@ def main() -> int:
             if args.no_gate_validate
             else None
         )
+        idea_raw = (args.idea or "").strip()
+        has_idea = bool(idea_raw)
+        has_vision_file = bool(args.vision_file)
+        has_from_vision = bool(args.from_vision)
         if args.demo:
-            idea_text = None
-        else:
-            idea_text = (args.idea or "").strip()
-            if not idea_text:
-                print("vertical-slice: --idea must be non-empty.")
+            if has_idea or has_vision_file or has_from_vision:
+                print(
+                    "vertical-slice: do not combine --demo with --idea, --vision-file, or --from-vision."
+                )
                 return 1
+            idea_text = None
+            fixed_vision_text = None
+        else:
+            non_demo_modes = sum(
+                1 for flag in (has_idea, has_vision_file, has_from_vision) if flag
+            )
+            if non_demo_modes == 0:
+                print(
+                    "vertical-slice: provide one of --demo, --idea, --vision-file PATH, or --from-vision."
+                )
+                return 1
+            idea_text = None
+            fixed_vision_text = None
+            if has_idea:
+                idea_text = idea_raw
+            elif has_vision_file:
+                vpath = resolve_vision_file_path(args.vision_file, base_dir=Paths.BASE_DIR)
+                try:
+                    fixed_vision_text = read_vision_file_text(vpath)
+                except FileNotFoundError as exc:
+                    print(f"vertical-slice: {exc}")
+                    return 1
+                except (OSError, ValueError) as exc:
+                    print(f"vertical-slice: {exc}")
+                    return 1
+            elif has_from_vision:
+                vpath = Paths.VISION_FILE
+                try:
+                    fixed_vision_text = read_vision_file_text(vpath)
+                except FileNotFoundError as exc:
+                    print(f"vertical-slice: {exc}")
+                    return 1
+                except (OSError, ValueError) as exc:
+                    print(f"vertical-slice: {exc}")
+                    return 1
         return (
             0
             if ForgeCLI.vertical_slice(
                 demo=bool(args.demo),
                 idea=idea_text,
+                fixed_vision=fixed_vision_text,
                 milestone_id=args.milestone_id,
                 planner_mode=args.planner,
                 gate_validate=vs_gate_validate_override,
