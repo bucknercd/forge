@@ -5,8 +5,8 @@
 ## Features
 
 - **Design artifacts** under `docs/`: vision, requirements, architecture, decisions, milestones
-- **Runtime state** under `.system/`: milestone state, plans, results, run history
-- **Dependency-aware milestones**, retries, LLM-backed execution (stub-friendly), and append-only audit trails
+- **Runtime state** under `.system/`: milestone state, structured results, run history
+- **Dependency-aware milestones**, deterministic **artifact actions** (no shell / no network), retries, and append-only audit trails
 
 ## Requirements
 
@@ -74,9 +74,24 @@ Edit `docs/milestones.md`. Each milestone should use a heading like:
 ```markdown
 ## Milestone 1: Your title
 - **Objective**: …
+- **Scope**: …
+- **Validation**: …
 ```
 
-(Objective is required; see project docs for full rules.)
+**Execution (required for `forge execute-next` / `forge milestone-execute`)** — declare deterministic file updates and how to verify them:
+
+```markdown
+- **Forge Actions**:
+  - append_section requirements Overview | Your marker text or paragraph
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements YOUR_MARKER
+```
+
+Supported action verbs (first token): `append_section`, `replace_section`, `add_decision`, `mark_milestone_completed`.  
+Targets: `requirements`, `architecture`, `decisions`, `milestones` (mapped to files under `docs/`).
+
+Results are written to `.system/results/milestone_<id>.json` (`execution_plan`, `files_changed`, `actions_applied`). Successful runs also append a summary entry to `docs/decisions.md` unless the plan includes `add_decision`.
 
 ### Common commands
 
@@ -92,7 +107,7 @@ Other commands (`milestone-list`, `milestone-show`, `milestone-execute`, etc.) a
 
 ```
 docs/                 # Vision, requirements, architecture, decisions, milestones
-.system/              # milestone_state.json, plans/, results/, run_history.log
+.system/              # milestone_state.json, results/*.json, run_history.log
 artifacts/            # Reserved for generated outputs
 forge/                # Package source
 tests/                # Pytest suite

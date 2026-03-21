@@ -119,6 +119,28 @@ def test_missing_objective_detected():
     assert "missing required objective" in str(exc.value).lower()
 
 
+def test_parse_milestones_extracts_forge_actions_and_validation():
+    content = """# Milestones
+
+## Milestone 1: With Forge
+- **Objective**: O1
+- **Scope**: S1
+- **Validation**: V1
+- **Forge Actions**:
+  - append_section requirements Overview | HELLO
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements HELLO
+"""
+    milestones = MilestoneService.parse_milestones(content)
+    assert len(milestones) == 1
+    assert milestones[0].forge_actions == [
+        "append_section requirements Overview | HELLO",
+        "mark_milestone_completed",
+    ]
+    assert milestones[0].forge_validation == ["file_contains requirements HELLO"]
+
+
 def test_multiple_milestones_parse_deterministically():
     content = """# Milestones
 

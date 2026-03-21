@@ -24,6 +24,8 @@ class Milestone:
         scope: str,
         validation: str,
         depends_on: List[int] | None = None,
+        forge_actions: List[str] | None = None,
+        forge_validation: List[str] | None = None,
     ):
         self.id = id
         self.title = title
@@ -31,6 +33,8 @@ class Milestone:
         self.scope = scope
         self.validation = validation
         self.depends_on = depends_on or []
+        self.forge_actions = forge_actions or []
+        self.forge_validation = forge_validation or []
 
     def __str__(self):
         return (
@@ -93,7 +97,37 @@ class MilestoneService:
             milestones.append(current_milestone)
 
         MilestoneService._validate_milestones(milestones)
+        for m in milestones:
+            block = MilestoneService._milestone_block(content, m.id)
+            m.forge_actions = MilestoneService._parse_forge_list(block, "Forge Actions")
+            m.forge_validation = MilestoneService._parse_forge_list(block, "Forge Validation")
         return milestones
+
+    @staticmethod
+    def _milestone_block(content: str, milestone_id: int) -> str:
+        pattern = re.compile(
+            rf"(?ms)^##\s+Milestone\s+{milestone_id}\s*:\s*.+?(?=^##\s+Milestone\s+\d+|\Z)"
+        )
+        m = pattern.search(content)
+        return m.group(0) if m else ""
+
+    @staticmethod
+    def _parse_forge_list(block: str, field: str) -> List[str]:
+        if not block:
+            return []
+        needle = f"- **{field}**:"
+        idx = block.find(needle)
+        if idx == -1:
+            return []
+        rest = block[idx + len(needle) :]
+        lines: List[str] = []
+        for line in rest.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- **"):
+                break
+            if stripped.startswith("- ") and not stripped.startswith("- **"):
+                lines.append(stripped[2:].strip())
+        return lines
 
     @staticmethod
     def list_milestones() -> List[Milestone]:

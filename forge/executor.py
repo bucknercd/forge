@@ -10,10 +10,21 @@ from forge.milestone_state import normalize_milestone_state_value
 from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
 
-from forge.llm import LLMClient, StubLLMClient
-from forge.prompt_builder import build_execution_prompt, build_retry_prompt
+from forge.execution.models import ActionAddDecision, ExecutionPlan
+from forge.execution.plan import ExecutionPlanBuilder
+from forge.execution.apply import ArtifactActionApplier
 
 MAX_RETRIES = 2
+
+
+def _plan_has_add_decision(plan: ExecutionPlan) -> bool:
+    return any(isinstance(a, ActionAddDecision) for a in plan.actions)
+
+
+def _build_summary(applied_files: list[str], action_count: int) -> str:
+    files = ", ".join(applied_files) if applied_files else "(no file writes)"
+    return f"Applied {action_count} action(s). Updated: {files}"
+
 
 class Executor:
     @staticmethod
@@ -68,11 +79,11 @@ class Executor:
         }
 
     @staticmethod
-    def execute_milestone(milestone_id: int, llm_client: LLMClient | None = None):
-        return Executor._execute_milestone_internal(milestone_id, llm_client=llm_client)
+    def execute_milestone(milestone_id: int) -> None:
+        return Executor._execute_milestone_internal(milestone_id)
 
     @staticmethod
-    def _execute_milestone_internal(milestone_id: int, llm_client: LLMClient | None):
+    def _execute_milestone_internal(milestone_id: int) -> None:
         try:
             milestone = MilestoneService.get_milestone(milestone_id)
         except ValueError as exc:
@@ -132,7 +143,7 @@ class Executor:
             task=f"Execute milestone {milestone_id} (Attempt {milestone_state['attempts']})",
             summary=f"{milestone.title}: {milestone.objective}",
             status="started",
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
         RunHistory.log_run(entry)
 
@@ -141,50 +152,44 @@ class Executor:
         result_dir.mkdir(parents=True, exist_ok=True)
         result_file = result_dir / f"milestone_{milestone_id}.json"
 
-        llm_client = llm_client or StubLLMClient()
+        try:
+            plan = ExecutionPlanBuilder.build(milestone)
+        except ValueError as exc:
+            Executor._write_failure_payload(
+                result_file,
+                milestone_id,
+                milestone,
+                error=f"Invalid forge actions: {exc}",
+            )
+            Executor._finalize_failed_or_retry(
+                milestone_id,
+                milestone,
+                milestone_state,
+                state,
+                state_file,
+                result_file,
+                reason=f"Invalid forge actions: {exc}",
+            )
+            return
 
-        attempt_number = milestone_state["attempts"]
+        applier = ArtifactActionApplier(Paths)
+        apply_result = applier.apply(plan, milestone)
 
-        previous_validation_error = ""
-        if attempt_number > 1 and result_file.exists():
-            try:
-                with result_file.open("r", encoding="utf-8") as file:
-                    previous = json.load(file)
-                previous_validation_error = previous.get("validation_error", "") or ""
-            except Exception:
-                previous_validation_error = ""
+        files_norm = apply_result.normalized_files_changed()
+        summary = _build_summary(files_norm, len(plan.actions))
 
-        if attempt_number <= 1 or not previous_validation_error:
-            prompt = build_execution_prompt(milestone, attempt_number)
-        else:
-            prompt = build_retry_prompt(milestone, attempt_number, previous_validation_error)
-
-        llm_output = llm_client.generate(prompt)
-
-        result_payload = {"id": milestone_id, "title": milestone.title}
-        if isinstance(llm_output, str) and llm_output.strip():
-            try:
-                parsed = json.loads(llm_output)
-                if isinstance(parsed, dict) and parsed.get("summary") is not None:
-                    result_payload["summary"] = parsed.get("summary")
-                    result_payload["llm_output"] = llm_output
-                else:
-                    result_payload["raw_output"] = llm_output
-            except Exception:
-                result_payload["raw_output"] = llm_output
+        result_payload: dict = {
+            "id": milestone_id,
+            "title": milestone.title,
+            "summary": summary,
+            "files_changed": files_norm,
+            "actions_applied": apply_result.actions_applied,
+            "execution_plan": plan.to_serializable(),
+            "apply_errors": apply_result.errors,
+        }
 
         with result_file.open("w", encoding="utf-8") as file:
             json.dump(result_payload, file, indent=4)
-
-        # Create the plan file
-        plan_dir = Paths.SYSTEM_DIR / "plans"
-        plan_dir.mkdir(parents=True, exist_ok=True)
-        plan_file = plan_dir / f"milestone_{milestone_id}.md"
-        with plan_file.open("w", encoding="utf-8") as file:
-            file.write(f"# Plan for {milestone.title}\n\n")
-            file.write(f"## Objective\n{milestone.objective}\n\n")
-            file.write(f"## Scope\n{milestone.scope}\n\n")
-            file.write(f"## Validation\n{milestone.validation}\n")
 
         # Perform validation step
         is_valid, reason = Validator.validate_milestone_with_report(milestone_id)
@@ -194,19 +199,20 @@ class Executor:
                 task=f"Execute milestone {milestone_id} (Attempt {milestone_state['attempts']})",
                 summary=f"{milestone.title}: {milestone.objective}",
                 status="completed",
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
             RunHistory.log_run(entry)
 
             # Update state to completed
             milestone_state["status"] = "completed"
 
-            # Record append-only decision history for successful execution.
-            DecisionTracker.append_milestone_success_decision(
-                milestone_id=milestone_id,
-                milestone_title=milestone.title,
-                summary=str(result_payload.get("summary", "Execution completed successfully.")),
-            )
+            # Record append-only decision history unless the plan already added a decision.
+            if not _plan_has_add_decision(plan):
+                DecisionTracker.append_milestone_success_decision(
+                    milestone_id=milestone_id,
+                    milestone_title=milestone.title,
+                    summary=summary,
+                )
 
             RunHistory.log_milestone_attempt(
                 milestone_id=milestone_id,
@@ -219,7 +225,7 @@ class Executor:
             else:
                 milestone_state["status"] = "failed"
 
-            # Store validation error for prompt retry context.
+            # Store validation error for operator visibility.
             try:
                 with result_file.open("r", encoding="utf-8") as file:
                     updated_payload = json.load(file)
@@ -234,7 +240,7 @@ class Executor:
                 task=f"Execute milestone {milestone_id} (Attempt {milestone_state['attempts']})",
                 summary=f"{milestone.title}: {milestone.objective}",
                 status=milestone_state["status"],
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
             RunHistory.log_run(entry)
 
@@ -246,6 +252,58 @@ class Executor:
             )
 
         # Persist updated state
+        state[str(milestone_id)] = milestone_state
+        with state_file.open("w", encoding="utf-8") as file:
+            json.dump(state, file, indent=4)
+
+    @staticmethod
+    def _write_failure_payload(
+        result_file,
+        milestone_id: int,
+        milestone,
+        error: str,
+    ) -> None:
+        payload = {
+            "id": milestone_id,
+            "title": milestone.title,
+            "summary": "",
+            "files_changed": [],
+            "actions_applied": [],
+            "execution_plan": {},
+            "apply_errors": [error],
+            "validation_error": error,
+        }
+        with result_file.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, indent=4)
+
+    @staticmethod
+    def _finalize_failed_or_retry(
+        milestone_id: int,
+        milestone,
+        milestone_state: dict,
+        state: dict,
+        state_file,
+        result_file,
+        reason: str,
+    ) -> None:
+        if milestone_state["attempts"] < MAX_RETRIES:
+            milestone_state["status"] = "retry_pending"
+        else:
+            milestone_state["status"] = "failed"
+
+        entry = RunHistoryEntry(
+            task=f"Execute milestone {milestone_id} (Attempt {milestone_state['attempts']})",
+            summary=f"{milestone.title}: {milestone.objective}",
+            status=milestone_state["status"],
+            timestamp=datetime.now(),
+        )
+        RunHistory.log_run(entry)
+        RunHistory.log_milestone_attempt(
+            milestone_id=milestone_id,
+            milestone_title=milestone.title,
+            status="failure",
+            error_message=reason,
+        )
         state[str(milestone_id)] = milestone_state
         with state_file.open("w", encoding="utf-8") as file:
             json.dump(state, file, indent=4)

@@ -33,6 +33,11 @@ def starter_templates() -> dict[str, str]:
             "- **Objective**: Establish the initial project structure.\n"
             "- **Scope**: Bootstrap docs, runtime state, and baseline workflows.\n"
             "- **Validation**: Confirm core commands run successfully.\n"
+            "- **Forge Actions**:\n"
+            "  - append_section requirements Overview | FORGE_INIT_MARKER\n"
+            "  - mark_milestone_completed\n"
+            "- **Forge Validation**:\n"
+            "  - file_contains requirements FORGE_INIT_MARKER\n"
         ),
     }
 

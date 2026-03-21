@@ -6,22 +6,26 @@ from forge.cli import ForgeCLI
 from forge.executor import Executor
 from forge.paths import Paths
 
+from tests.forge_test_project import forge_block
+
 
 def _write_dependency_milestones(path):
     path.write_text(
-        """
+        f"""
 # Milestones
 
 ## Milestone 1: Prerequisite
 - **Objective**: Do the prerequisite
 - **Scope**: Scope for prereq
 - **Validation**: Validate prereq
+{forge_block("DEP_M1")}
 
 ## Milestone 2: Dependent
 - **Depends On**: 1
 - **Objective**: Do dependent work
 - **Scope**: Scope for dependent
 - **Validation**: Validate dependent
+{forge_block("DEP_M2")}
 """
     )
 
@@ -45,13 +49,21 @@ def _write_failed_prereq_milestones(path):
     )
 
 
-def test_dependent_becomes_runnable_after_prerequisite_completes(tmp_path, capsys):
-    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
-    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
-    _write_dependency_milestones(Paths.MILESTONES_FILE)
+def _bootstrap_project(tmp_path):
+    Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.REQUIREMENTS_FILE.write_text("# Requirements\n\n## Overview\n\n", encoding="utf-8")
+    Paths.ARCHITECTURE_FILE.write_text("# Architecture\n\n## Design\n\n", encoding="utf-8")
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n## Log\n\n", encoding="utf-8")
+    Paths.RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.RUN_HISTORY_FILE.touch()
 
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
+
+def test_dependent_becomes_runnable_after_prerequisite_completes(tmp_path, capsys):
+    _bootstrap_project(tmp_path)
+    _write_dependency_milestones(Paths.MILESTONES_FILE)
 
     ForgeCLI.milestone_sync_state()
 
@@ -67,12 +79,8 @@ def test_dependent_becomes_runnable_after_prerequisite_completes(tmp_path, capsy
 
 
 def test_dependent_is_blocked_when_prerequisite_fails_after_retries(tmp_path, capsys):
-    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
-    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
+    _bootstrap_project(tmp_path)
     _write_failed_prereq_milestones(Paths.MILESTONES_FILE)
-
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
 
     ForgeCLI.milestone_sync_state()
 
@@ -96,8 +104,7 @@ def test_dependent_is_blocked_when_prerequisite_fails_after_retries(tmp_path, ca
 
 
 def test_project_reports_all_complete_when_no_runnable_milestones(tmp_path, capsys):
-    Paths.MILESTONES_FILE = tmp_path / "docs" / "milestones.md"
-    Paths.MILESTONES_FILE.parent.mkdir(parents=True)
+    _bootstrap_project(tmp_path)
     Paths.MILESTONES_FILE.write_text(
         """
 # Milestones
@@ -114,9 +121,6 @@ def test_project_reports_all_complete_when_no_runnable_milestones(tmp_path, caps
 """
     )
 
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
-
     ForgeCLI.milestone_sync_state()
     capsys.readouterr()
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
@@ -130,4 +134,3 @@ def test_project_reports_all_complete_when_no_runnable_milestones(tmp_path, caps
     ForgeCLI.milestone_next()
     out = capsys.readouterr().out
     assert out.strip() == "All milestones completed."
-

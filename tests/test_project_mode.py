@@ -14,6 +14,11 @@ def _write_minimal_milestones(path: Path):
 - **Objective**: Build first
 - **Scope**: Small scope
 - **Validation**: Validate first
+- **Forge Actions**:
+  - append_section requirements Overview | FORGE_CLI_OK
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements FORGE_CLI_OK
 """
     )
 

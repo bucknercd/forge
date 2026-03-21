@@ -4,30 +4,32 @@ from forge.cli import ForgeCLI
 from forge.executor import Executor
 from forge.paths import Paths
 
+from tests.forge_test_project import configure_project, forge_block
 
-def _write_two_simple_milestones(path):
-    path.write_text(
-        """
+
+def _two_milestones_body():
+    return f"""
 # Milestones
 
 ## Milestone 1: A
 - **Objective**: A objective
 - **Scope**: A scope
 - **Validation**: A validation
+{forge_block("FORGE_M1")}
 
 ## Milestone 2: B
 - **Objective**: B objective
 - **Scope**: B scope
 - **Validation**: B validation
+{forge_block("FORGE_M2")}
 """
-    )
 
 
 def _write_dependency_milestones(path, prereq_incomplete=False):
-    # If prereq_incomplete=True, milestone 1 stays parse-valid but fails validation.
     prereq_obj = "Prereq objective"
     prereq_scope = "" if prereq_incomplete else "Prereq scope"
     prereq_val = "" if prereq_incomplete else "Prereq validation"
+    prereq_forge = "" if prereq_incomplete else forge_block("FORGE_PREREQ")
 
     path.write_text(
         f"""
@@ -37,22 +39,20 @@ def _write_dependency_milestones(path, prereq_incomplete=False):
 - **Objective**: {prereq_obj}
 - **Scope**: {prereq_scope}
 - **Validation**: {prereq_val}
+{prereq_forge}
 
 ## Milestone 2: Dependent
 - **Depends On**: 1
 - **Objective**: Dependent objective
 - **Scope**: Dependent scope
 - **Validation**: Dependent validation
+{forge_block("FORGE_DEP")}
 """
     )
 
 
 def test_execute_next_executes_first_not_started(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_two_simple_milestones(Paths.MILESTONES_FILE)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
-
+    configure_project(tmp_path, _two_milestones_body())
     ForgeCLI.milestone_sync_state()
 
     result = Executor.execute_next()
@@ -64,20 +64,20 @@ def test_execute_next_executes_first_not_started(tmp_path):
     assert state["1"]["attempts"] == 1
     assert state["2"]["status"] == "not_started"
 
-    # Ensure artifacts exist for executed milestone.
-    assert (Paths.SYSTEM_DIR / "plans" / "milestone_1.md").exists()
     assert (Paths.SYSTEM_DIR / "results" / "milestone_1.json").exists()
 
 
 def test_execute_next_prefers_retry_pending(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_two_simple_milestones(Paths.MILESTONES_FILE)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
+    configure_project(tmp_path, _two_milestones_body())
+    ForgeCLI.milestone_sync_state()
 
-    # Set up state such that milestone 1 is retry_pending and milestone 2 is not_started.
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
-    state_file.write_text(json.dumps({"1": {"status": "retry_pending", "attempts": 1}, "2": {"status": "not_started", "attempts": 0}}, indent=4))
+    state_file.write_text(
+        json.dumps(
+            {"1": {"status": "retry_pending", "attempts": 1}, "2": {"status": "not_started", "attempts": 0}},
+            indent=4,
+        )
+    )
 
     result = Executor.execute_next()
     assert result["outcome"] == "complete"
@@ -90,10 +90,8 @@ def test_execute_next_prefers_retry_pending(tmp_path):
 
 
 def test_execute_next_returns_complete_when_all_done(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_two_simple_milestones(Paths.MILESTONES_FILE)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
+    configure_project(tmp_path, _two_milestones_body())
+    ForgeCLI.milestone_sync_state()
 
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
     state_file.write_text(
@@ -111,10 +109,8 @@ def test_execute_next_returns_complete_when_all_done(tmp_path):
 
 
 def test_execute_next_returns_in_progress_when_active_and_nothing_else(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_two_simple_milestones(Paths.MILESTONES_FILE)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
+    configure_project(tmp_path, _two_milestones_body())
+    ForgeCLI.milestone_sync_state()
 
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
     state_file.write_text(
@@ -132,10 +128,16 @@ def test_execute_next_returns_in_progress_when_active_and_nothing_else(tmp_path)
 
 
 def test_execute_next_returns_blocked_when_prereq_failed(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_dependency_milestones(Paths.MILESTONES_FILE)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
+    Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.REQUIREMENTS_FILE.write_text("# Requirements\n\n## Overview\n\n", encoding="utf-8")
+    Paths.ARCHITECTURE_FILE.write_text("# Architecture\n\n## Design\n\n", encoding="utf-8")
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n## Log\n\n", encoding="utf-8")
+    Paths.RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.RUN_HISTORY_FILE.touch()
+    _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=False)
 
     # Prerequisite failed => dependent should be blocked and not runnable.
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
@@ -155,14 +157,20 @@ def test_execute_next_returns_blocked_when_prereq_failed(tmp_path):
     # Ensure dependent did not run.
     state_after = json.loads(state_file.read_text())
     assert state_after["2"]["status"] == "not_started"
-    assert not (Paths.SYSTEM_DIR / "plans" / "milestone_2.md").exists()
+    assert not (Paths.SYSTEM_DIR / "results" / "milestone_2.json").exists()
 
 
 def test_execute_next_integration_runs_prereq_then_dependent(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
+    Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.REQUIREMENTS_FILE.write_text("# Requirements\n\n## Overview\n\n", encoding="utf-8")
+    Paths.ARCHITECTURE_FILE.write_text("# Architecture\n\n## Design\n\n", encoding="utf-8")
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n## Log\n\n", encoding="utf-8")
+    Paths.RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.RUN_HISTORY_FILE.touch()
     _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=False)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
 
     ForgeCLI.milestone_sync_state()
 
@@ -179,10 +187,16 @@ def test_execute_next_integration_runs_prereq_then_dependent(tmp_path):
 
 
 def test_execute_next_integration_skips_blocked_dependent(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
+    Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.REQUIREMENTS_FILE.write_text("# Requirements\n\n## Overview\n\n", encoding="utf-8")
+    Paths.ARCHITECTURE_FILE.write_text("# Architecture\n\n## Design\n\n", encoding="utf-8")
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n## Log\n\n", encoding="utf-8")
+    Paths.RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.RUN_HISTORY_FILE.touch()
     _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=True)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
 
     ForgeCLI.milestone_sync_state()
 
@@ -197,15 +211,20 @@ def test_execute_next_integration_skips_blocked_dependent(tmp_path):
     # After second retry, prereq should be failed; next step should be blocked (dependent still not executed).
     res3 = Executor.execute_next()
     assert res3["outcome"] == "blocked"
-    assert not (Paths.SYSTEM_DIR / "plans" / "milestone_2.md").exists()
+    assert not (Paths.SYSTEM_DIR / "results" / "milestone_2.json").exists()
 
 
 def test_execute_next_resume_after_prereq_recovery(tmp_path):
-    # Start with prereq failing; then fix markdown so it can complete and unlock the dependent.
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
+    Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.REQUIREMENTS_FILE.write_text("# Requirements\n\n## Overview\n\n", encoding="utf-8")
+    Paths.ARCHITECTURE_FILE.write_text("# Architecture\n\n## Design\n\n", encoding="utf-8")
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n## Log\n\n", encoding="utf-8")
+    Paths.RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.RUN_HISTORY_FILE.touch()
     _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=True)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
 
     ForgeCLI.milestone_sync_state()
 
@@ -214,7 +233,7 @@ def test_execute_next_resume_after_prereq_recovery(tmp_path):
     state = json.loads((Paths.SYSTEM_DIR / "milestone_state.json").read_text())
     assert state["1"]["status"] == "retry_pending"
 
-    # Recover prerequisite by updating milestone 1 fields.
+    # Recover prerequisite by updating milestone 1 fields (add forge actions).
     _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=False)
 
     second = Executor.execute_next()
@@ -228,15 +247,7 @@ def test_execute_next_resume_after_prereq_recovery(tmp_path):
 
 
 def test_repeated_successful_executions_append_decisions(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_two_simple_milestones(Paths.MILESTONES_FILE)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
-    Paths.DOCS_DIR = tmp_path / "docs"
-    Paths.DECISIONS_FILE = Paths.DOCS_DIR / "decisions.md"
-    Paths.DECISIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    Paths.DECISIONS_FILE.write_text("# Decisions\n", encoding="utf-8")
-
+    configure_project(tmp_path, _two_milestones_body())
     ForgeCLI.milestone_sync_state()
     Executor.execute_next()  # milestone 1 success
     first_content = Paths.DECISIONS_FILE.read_text(encoding="utf-8")
@@ -248,12 +259,7 @@ def test_repeated_successful_executions_append_decisions(tmp_path):
 
 
 def test_repeated_execute_next_appends_structured_run_history(tmp_path):
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    _write_two_simple_milestones(Paths.MILESTONES_FILE)
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
-    Paths.RUN_HISTORY_FILE = Paths.SYSTEM_DIR / "run_history.log"
-
+    configure_project(tmp_path, _two_milestones_body())
     ForgeCLI.milestone_sync_state()
     Executor.execute_next()
     Executor.execute_next()

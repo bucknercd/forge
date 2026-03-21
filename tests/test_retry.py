@@ -3,23 +3,24 @@ from forge.executor import Executor
 from forge.paths import Paths
 import json
 
+from tests.forge_test_project import configure_project, forge_block
+
+
 def test_retry_milestone(tmp_path):
-    # Setup milestone file
-    Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    Paths.MILESTONES_FILE.write_text("""
+    configure_project(
+        tmp_path,
+        f"""
 # Milestones
 
 ## Milestone 1: Retry Task
 - **Objective**: Test retry logic
 - **Scope**: Ensure retries work
 - **Validation**: Verify retry behavior
-""")
+{forge_block("FORGE_RETRY_OK")}
+""",
+    )
 
-    # Setup system directory
-    Paths.SYSTEM_DIR = tmp_path / ".system"
-    Paths.SYSTEM_DIR.mkdir()
-
-    # Simulate a failed milestone
+    # Simulate a failed milestone (validation failure from missing marker)
     state_file = Paths.SYSTEM_DIR / "milestone_state.json"
     state = {
         "1": {
@@ -30,11 +31,15 @@ def test_retry_milestone(tmp_path):
     with state_file.open("w", encoding="utf-8") as file:
         json.dump(state, file, indent=4)
 
-    # Retry the milestone
+    # Remove marker so first "retry" path could have failed; idempotent apply restores marker.
+    Paths.REQUIREMENTS_FILE.write_text(
+        "# Requirements\n\n## Overview\n\nBase content.\n", encoding="utf-8"
+    )
+
     Executor.execute_milestone(1)
 
-    # Validate milestone state
     with state_file.open("r", encoding="utf-8") as file:
         updated_state = json.load(file)
     assert updated_state["1"]["status"] == "completed"
     assert updated_state["1"]["attempts"] == 2
+    assert "FORGE_RETRY_OK" in Paths.REQUIREMENTS_FILE.read_text(encoding="utf-8")

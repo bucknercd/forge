@@ -1,23 +1,34 @@
 from forge.paths import Paths
 import json
 from forge.design_manager import MilestoneService
+from forge.execution.plan import ExecutionPlanBuilder
+from forge.execution.validation_rules import validate_all_rules
+
 
 class Validator:
     @staticmethod
     def validate_milestone_with_report(milestone_id: int) -> tuple[bool, str]:
-        """Validate the milestone execution results and return a reason on failure."""
-        plan_file = Paths.SYSTEM_DIR / "plans" / f"milestone_{milestone_id}.md"
+        """Validate artifact-driven execution results and return a reason on failure."""
         result_file = Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json"
 
-        # Check if plan and result files exist
-        if not plan_file.exists() or not result_file.exists():
-            return False, "Missing plan file or result file."
+        if not result_file.exists():
+            return False, "Missing result file."
 
-        # Check if result file contains required fields
         with result_file.open("r", encoding="utf-8") as file:
             result = json.load(file)
 
-        required_fields = ["id", "title", "summary"]
+        apply_errors = result.get("apply_errors") or []
+        if apply_errors:
+            return False, f"Apply errors: {'; '.join(apply_errors)}"
+
+        required_fields = [
+            "id",
+            "title",
+            "summary",
+            "files_changed",
+            "actions_applied",
+            "execution_plan",
+        ]
         missing = [field for field in required_fields if field not in result]
         if missing:
             return False, f"Result missing required fields: {', '.join(missing)}"
@@ -25,7 +36,6 @@ class Validator:
         if not str(result.get("summary", "")).strip():
             return False, "Result summary is empty."
 
-        # Load the milestone and validate its fields
         milestone = MilestoneService.get_milestone(milestone_id)
         if not milestone:
             return False, "Milestone not found during validation."
@@ -38,6 +48,23 @@ class Validator:
             return False, (
                 "Milestone objective/scope/validation fields must be non-empty."
             )
+
+        if not milestone.forge_actions:
+            return False, "No Forge Actions defined for this milestone."
+
+        if milestone.forge_actions and not milestone.forge_validation:
+            return False, (
+                "Forge Validation rules are required when Forge Actions are defined."
+            )
+
+        try:
+            rules = ExecutionPlanBuilder.parse_validation_rules(milestone)
+        except ValueError as exc:
+            return False, f"Invalid forge validation rules: {exc}"
+
+        ok, reason = validate_all_rules(rules, Paths)
+        if not ok:
+            return False, reason
 
         return True, ""
 
