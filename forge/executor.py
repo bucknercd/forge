@@ -87,6 +87,63 @@ class Executor:
         return Executor._execute_milestone_internal(milestone_id)
 
     @staticmethod
+    def preview_milestone(milestone_id: int) -> dict:
+        """
+        Build and simulate a milestone execution plan without side effects.
+        """
+        try:
+            milestone = MilestoneService.get_milestone(milestone_id)
+        except ValueError as exc:
+            return {"ok": False, "message": f"Milestone definition error: {exc}"}
+        if not milestone:
+            return {"ok": False, "message": "Invalid milestone ID."}
+
+        try:
+            plan = ExecutionPlanBuilder.build(milestone)
+            _ = ExecutionPlanBuilder.parse_validation_rules(milestone)
+        except ValueError as exc:
+            return {"ok": False, "message": str(exc), "milestone_id": milestone_id}
+
+        applier = ArtifactActionApplier(Paths)
+        preview = applier.apply(plan, milestone, dry_run=True)
+        return {
+            "ok": len(preview.errors) == 0,
+            "milestone_id": milestone.id,
+            "title": milestone.title,
+            "execution_plan": plan.to_serializable(),
+            "files_changed": preview.normalized_files_changed(),
+            "artifact_summary": preview.human_summary(),
+            "actions_applied": preview.actions_applied,
+            "errors": preview.errors,
+        }
+
+    @staticmethod
+    def preview_next() -> dict:
+        """
+        Preview next eligible milestone without executing or mutating state.
+        """
+        milestone_service = MilestoneService()
+        state_repository = MilestoneStateRepository(Paths.SYSTEM_DIR / "milestone_state.json")
+        selector = MilestoneSelector(milestone_service, state_repository)
+
+        try:
+            next_milestone, report = selector.get_next_milestone_with_report()
+        except ValueError as exc:
+            return {"ok": False, "message": f"Milestone definition error: {exc}"}
+
+        if next_milestone is None:
+            kind = (report or {}).get("kind")
+            if kind == "all_complete":
+                return {"ok": False, "message": "All milestones completed."}
+            if kind == "in_progress":
+                return {"ok": False, "message": "Progress is already in progress."}
+            return {
+                "ok": False,
+                "message": "Progress is blocked by failed/unmet prerequisites.",
+            }
+        return Executor.preview_milestone(next_milestone.id)
+
+    @staticmethod
     def _execute_milestone_internal(milestone_id: int) -> None:
         try:
             milestone = MilestoneService.get_milestone(milestone_id)

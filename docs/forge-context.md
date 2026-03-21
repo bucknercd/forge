@@ -176,15 +176,14 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add dry-run execution preview for milestones.
+Add machine-readable output modes for lint and preview.
 
-- implement a dry-run mode that builds the execution plan without mutating files
-- show which actions would run and which artifacts would be targeted
-- include predicted per-action outcomes where possible
-- generate preview diffs for file-backed actions without writing changes
-- keep preview deterministic and file-based
-- support previewing a single milestone and the next selected milestone
-- preserve existing execution, retry, and run-history behavior for real runs
+- support JSON output for `forge milestone-lint`
+- support JSON output for `forge milestone-preview`
+- preserve current human-readable output as the default
+- include milestone metadata, diagnostics, artifact summaries, action outcomes, and bounded diffs where applicable
+- keep output deterministic and stable for automation use
+- avoid side effects for lint and preview commands
 
 Goal:
-Allow users to inspect planned artifact changes before applying them.
+Make Forge easy to integrate with CI, scripts, editor tooling, and future higher-level orchestration.

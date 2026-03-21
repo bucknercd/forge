@@ -119,6 +119,8 @@ Example (valid):
 ```bash
 forge milestone-sync-state   # reconcile .system/milestone_state.json with milestones.md
 forge milestone-next         # show next eligible milestone
+forge milestone-preview      # dry-run preview for next eligible milestone
+forge milestone-preview 2    # dry-run preview for a specific milestone
 forge execute-next           # run the next eligible milestone (orchestration)
 ```
 

@@ -58,11 +58,13 @@ class ArtifactActionApplier:
         }
         return mapping[target]
 
-    def apply(self, plan: ExecutionPlan, milestone: Milestone) -> ApplyResult:
+    def apply(
+        self, plan: ExecutionPlan, milestone: Milestone, *, dry_run: bool = False
+    ) -> ApplyResult:
         result = ApplyResult()
         for action in plan.actions:
             try:
-                self._apply_one(action, milestone, result)
+                self._apply_one(action, milestone, result, dry_run=dry_run)
             except Exception as exc:  # noqa: BLE001 — surface as execution error string
                 err = str(exc)
                 result.errors.append(err)
@@ -103,20 +105,29 @@ class ArtifactActionApplier:
             entry["diff_truncated"] = False
         result.actions_applied.append(entry)
 
-    def _apply_one(self, action: Any, milestone: Milestone, result: ApplyResult) -> None:
+    def _apply_one(
+        self, action: Any, milestone: Milestone, result: ApplyResult, *, dry_run: bool
+    ) -> None:
         if isinstance(action, ActionAppendSection):
             path = self._resolve(action.target)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not path.exists():
-                path.write_text(f"# {action.target.title()}\n\n", encoding="utf-8")
-            before = DesignManager.load_document(path)
+            default_header = f"# {action.target.title()}\n\n"
+            if not dry_run:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not path.exists():
+                    path.write_text(default_header, encoding="utf-8")
+            before = (
+                DesignManager.load_document(path)
+                if path.exists()
+                else default_header
+            )
             new_content, changed = append_to_section(
                 content=before,
                 section_heading=action.section_heading,
                 body=action.body,
             )
             if changed:
-                DesignManager.save_document(path, new_content)
+                if not dry_run:
+                    DesignManager.save_document(path, new_content)
                 result.files_changed.append(path)
             self._append_file_record(
                 result,
@@ -134,17 +145,24 @@ class ArtifactActionApplier:
 
         if isinstance(action, ActionReplaceSection):
             path = self._resolve(action.target)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not path.exists():
-                path.write_text(f"# {action.target.title()}\n\n", encoding="utf-8")
-            before = DesignManager.load_document(path)
+            default_header = f"# {action.target.title()}\n\n"
+            if not dry_run:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not path.exists():
+                    path.write_text(default_header, encoding="utf-8")
+            before = (
+                DesignManager.load_document(path)
+                if path.exists()
+                else default_header
+            )
             new_content, changed = replace_section_body(
                 content=before,
                 section_heading=action.section_heading,
                 body=action.body,
             )
             if changed:
-                DesignManager.save_document(path, new_content)
+                if not dry_run:
+                    DesignManager.save_document(path, new_content)
                 result.files_changed.append(path)
             self._append_file_record(
                 result,
@@ -162,19 +180,32 @@ class ArtifactActionApplier:
 
         if isinstance(action, ActionAddDecision):
             path = self._paths.DECISIONS_FILE
-            path.parent.mkdir(parents=True, exist_ok=True)
+            if not dry_run:
+                path.parent.mkdir(parents=True, exist_ok=True)
             before = path.read_text(encoding="utf-8") if path.exists() else ""
-            decision = Decision(
-                title=action.title,
-                context=action.context,
-                decision=action.decision,
-                rationale=action.rationale,
-                timestamp=datetime.now(),
-            )
-            DecisionTracker.append_decision(decision)
-            after = path.read_text(encoding="utf-8")
+            if dry_run:
+                ts = "PREVIEW_TIMESTAMP"
+                entry = (
+                    f"## {action.title}\n"
+                    f"- **Context**: {action.context}\n"
+                    f"- **Decision**: {action.decision}\n"
+                    f"- **Rationale**: {action.rationale}\n"
+                    f"- **Timestamp**: {ts}\n"
+                )
+                after = before + entry
+            else:
+                decision = Decision(
+                    title=action.title,
+                    context=action.context,
+                    decision=action.decision,
+                    rationale=action.rationale,
+                    timestamp=datetime.now(),
+                )
+                DecisionTracker.append_decision(decision)
+                after = path.read_text(encoding="utf-8")
             changed = before != after
-            result.files_changed.append(path)
+            if changed:
+                result.files_changed.append(path)
             self._append_file_record(
                 result,
                 action_type="add_decision",
@@ -194,7 +225,8 @@ class ArtifactActionApplier:
                 milestone_id=milestone.id,
             )
             if changed:
-                DesignManager.save_document(path, new_content)
+                if not dry_run:
+                    DesignManager.save_document(path, new_content)
                 result.files_changed.append(path)
             self._append_file_record(
                 result,

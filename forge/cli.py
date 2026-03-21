@@ -335,6 +335,43 @@ class ForgeCLI:
             # Provide a tiny bit of context without leaking orchestration internals.
             print(f"Milestone ID: {milestone_id}")
 
+    @staticmethod
+    def milestone_preview(milestone_id: int | None = None):
+        """Dry-run preview of milestone execution (no writes)."""
+        if milestone_id is None:
+            result = Executor.preview_next()
+        else:
+            result = Executor.preview_milestone(milestone_id)
+
+        if not result.get("ok"):
+            print(result.get("message", "Preview unavailable."))
+            return
+
+        print(
+            f"Preview Milestone: {result['milestone_id']}. {result.get('title', '')}"
+        )
+        print(f"Artifact Summary: {result.get('artifact_summary', '')}")
+        files = result.get("files_changed", [])
+        print("Targeted Artifacts:")
+        if files:
+            for f in files:
+                print(f"- {f}")
+        else:
+            print("- (none)")
+
+        print("Planned Actions:")
+        for idx, action in enumerate(result.get("actions_applied", []), start=1):
+            a_type = action.get("type", "unknown")
+            outcome = action.get("outcome", "unknown")
+            path = action.get("path", "")
+            path_part = f" path={path}" if path else ""
+            print(f"{idx}. {a_type} [{outcome}]{path_part}")
+            diff = action.get("diff")
+            if isinstance(diff, str) and diff.strip():
+                print("   diff:")
+                for line in diff.splitlines():
+                    print(f"     {line}")
+
 def main() -> int:
     Paths.refresh()
     parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
@@ -365,6 +402,12 @@ def main() -> int:
 
     subparsers.add_parser("milestone-next", help="Print the next milestone")
     subparsers.add_parser("milestone-sync-state", help="Reconcile milestone state with parsed milestones")
+    milestone_preview_parser = subparsers.add_parser(
+        "milestone-preview", help="Preview milestone execution without writing files"
+    )
+    milestone_preview_parser.add_argument(
+        "id", nargs="?", type=int, help="Optional milestone ID to preview"
+    )
     milestone_lint_parser = subparsers.add_parser(
         "milestone-lint", help="Lint milestone execution definitions"
     )
@@ -408,6 +451,8 @@ def main() -> int:
         ForgeCLI.milestone_next()
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
+    elif args.command == "milestone-preview":
+        ForgeCLI.milestone_preview(args.id)
     elif args.command == "milestone-lint":
         return 0 if ForgeCLI.milestone_lint(args.id) else 1
     elif args.command == "execute-next":
