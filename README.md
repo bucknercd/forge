@@ -6,6 +6,56 @@ It uses LLMs to generate milestones and code, while enforcing **review, validati
 
 ---
 
+## Quick Start (vertical slice)
+
+Reproduce the full loop **vision → requirements/architecture → milestones → plan → apply → validation** without writing policy by hand using the built-in demo:
+
+```bash
+mkdir forge-demo && cd forge-demo
+forge init
+forge vertical-slice --demo
+```
+
+**What happens**
+
+1. Writes `docs/vision.txt`, `docs/requirements.md`, `docs/architecture.md`, and `docs/milestones.md` with a tiny **CLI todo** example.
+2. Builds an execution plan from milestone **Forge Actions** (deterministic by default), including `write_file examples/todo_cli.py | …`.
+3. Saves a reviewed plan under `.system/reviewed_plans/`.
+4. Applies the plan (creates `examples/todo_cli.py`, appends to requirements, updates milestone status in `docs/milestones.md`).
+5. Runs **Forge Validation** (`path_file_contains`, `file_contains`) and the repo test gate **`python examples/todo_cli.py`** (demo default).
+
+You should see human output ending with `Overall: success`, and:
+
+```bash
+python examples/todo_cli.py --add "buy milk"
+```
+
+should print a line like `Added todo: buy milk`.
+
+**JSON trace**
+
+```bash
+forge vertical-slice --demo --json
+```
+
+**Your own idea (LLM)**
+
+Configure `forge-policy.json` → `planner.llm_client` (e.g. `openai` with `FORGE_OPENAI_API_KEY` or `OPENAI_API_KEY` set). Then:
+
+```bash
+forge vertical-slice --idea "Small FastAPI service with a /health route"
+```
+
+Use `--gate-test-cmd 'pytest -q'` (or similar) to match whatever the LLM milestone expects.
+
+**Bounded file writes**
+
+- Forge action: `write_file <rel_path> | <body>` (use `\n` in the body for newlines).  
+  Allowed prefixes: `examples/`, `src/`, `scripts/`, `tests/`.
+- Validation: `path_file_contains <rel_path> <substring>` (substring is the rest of the line).
+
+---
+
 ## Overview
 
 Forge follows a spec-driven workflow:

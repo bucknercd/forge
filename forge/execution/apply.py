@@ -13,9 +13,11 @@ from forge.execution.models import (
     ActionAppendSection,
     ActionMarkMilestoneCompleted,
     ActionReplaceSection,
+    ActionWriteFile,
     ApplyResult,
     ExecutionPlan,
 )
+from forge.execution.safe_paths import resolve_safe_project_path
 from forge.execution.section_ops import (
     append_to_section,
     insert_milestone_forge_status_completed,
@@ -34,6 +36,8 @@ def _action_type_name(action: Any) -> str:
         return "add_decision"
     if isinstance(action, ActionMarkMilestoneCompleted):
         return "mark_milestone_completed"
+    if isinstance(action, ActionWriteFile):
+        return "write_file"
     return type(action).__name__
 
 
@@ -236,6 +240,28 @@ class ArtifactActionApplier:
                 after=new_content if changed else before,
                 changed=changed,
                 extra={},
+            )
+            return
+
+        if isinstance(action, ActionWriteFile):
+            path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
+            if not dry_run:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            before = path.read_text(encoding="utf-8") if path.exists() else ""
+            after = action.body
+            changed = before != after
+            if changed:
+                if not dry_run:
+                    path.write_text(after, encoding="utf-8")
+                result.files_changed.append(path)
+            self._append_file_record(
+                result,
+                action_type="write_file",
+                path=path,
+                before=before,
+                after=after,
+                changed=changed,
+                extra={"rel_path": action.rel_path},
             )
             return
 

@@ -62,12 +62,12 @@ def _planner_warnings(planner_meta: dict, plan: ExecutionPlan) -> list[str]:
             )
         body_empty = 0
         for a in actions:
-            if a.get("type") in {"append_section", "replace_section"}:
+            if a.get("type") in {"append_section", "replace_section", "write_file"}:
                 if not str(a.get("body", "")).strip():
                     body_empty += 1
         if body_empty:
             warnings.append(
-                f"LLM plan includes {body_empty} section action(s) with empty body."
+                f"LLM plan includes {body_empty} section/write_file action(s) with empty body."
             )
     return warnings
 

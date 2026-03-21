@@ -34,11 +34,20 @@ class ActionMarkMilestoneCompleted:
     pass
 
 
+@dataclass(frozen=True)
+class ActionWriteFile:
+    """Write or replace a bounded repo-relative file (full body)."""
+
+    rel_path: str
+    body: str
+
+
 ForgeAction = Union[
     ActionAppendSection,
     ActionReplaceSection,
     ActionAddDecision,
     ActionMarkMilestoneCompleted,
+    ActionWriteFile,
 ]
 
 
@@ -80,6 +89,14 @@ class ExecutionPlan:
                 )
             elif isinstance(a, ActionMarkMilestoneCompleted):
                 out.append({"type": "mark_milestone_completed"})
+            elif isinstance(a, ActionWriteFile):
+                out.append(
+                    {
+                        "type": "write_file",
+                        "rel_path": a.rel_path,
+                        "body": a.body,
+                    }
+                )
         return {"milestone_id": self.milestone_id, "actions": out}
 
     @staticmethod
@@ -116,6 +133,10 @@ class ExecutionPlan:
                 )
             elif t == "mark_milestone_completed":
                 actions.append(ActionMarkMilestoneCompleted())
+            elif t == "write_file":
+                actions.append(
+                    ActionWriteFile(rel_path=item["rel_path"], body=item["body"])
+                )
             else:
                 raise ValueError(f"Unknown action type in stored plan: {t!r}")
         return ExecutionPlan(milestone_id=milestone_id, actions=actions)

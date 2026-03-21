@@ -35,6 +35,7 @@ from forge.milestone_synthesis import (
     load_synthesized_milestones,
     synthesize_milestones,
 )
+from forge.vertical_slice import run_vertical_slice
 
 
 def _review_enforcement_status(planner, policy, *, save_plan: bool) -> dict:
@@ -870,6 +871,55 @@ class ForgeCLI:
         )
 
     @staticmethod
+    def vertical_slice(
+        *,
+        demo: bool,
+        idea: str | None,
+        milestone_id: int = 1,
+        planner_mode: str | None = None,
+        gate_validate: bool | None = None,
+        gate_test_cmd: str | None = None,
+        disable_gate_test_cmd: bool = False,
+        gate_test_timeout_seconds: int | None = None,
+        gate_test_output_max_chars: int | None = None,
+        json_mode: bool = False,
+    ) -> bool:
+        """Idea → docs → reviewed plan → apply → validation gates (see `forge vertical-slice`)."""
+        payload = run_vertical_slice(
+            demo=demo,
+            idea=idea,
+            milestone_id=milestone_id,
+            planner_mode=planner_mode,
+            gate_validate=gate_validate,
+            gate_test_cmd=gate_test_cmd,
+            disable_gate_test_cmd=disable_gate_test_cmd,
+            gate_test_timeout_seconds=gate_test_timeout_seconds,
+            gate_test_output_max_chars=gate_test_output_max_chars,
+        )
+        if json_mode:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return bool(payload.get("ok"))
+        print("Vertical slice:")
+        for s in payload.get("stages", []):
+            stage = s.get("stage", "?")
+            ok = bool(s.get("ok", False))
+            label = "OK" if ok else "FAIL"
+            print(f"- [{label}] {stage}")
+            msg = s.get("message")
+            if msg:
+                print(f"  {msg}")
+            if s.get("plan_id"):
+                print(f"  plan_id={s.get('plan_id')}")
+            if s.get("artifact_summary"):
+                print(f"  artifacts: {s.get('artifact_summary')}")
+            if s.get("gate_summary"):
+                print(f"  gates: {s.get('gate_summary')}")
+        if payload.get("plan_id"):
+            print(f"plan_id: {payload.get('plan_id')}")
+        print(f"Overall: {'success' if payload.get('ok') else 'failure'}")
+        return bool(payload.get("ok"))
+
+    @staticmethod
     def _print_workflow_result(
         stages: list[dict], *, json_mode: bool, synthesis_id: str | None, plan_id: str | None
     ) -> bool:
@@ -1090,9 +1140,72 @@ def main() -> int:
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
 
+    vertical_slice_parser = subparsers.add_parser(
+        "vertical-slice",
+        help="End-to-end: write vision/specs/milestones, save reviewed plan, apply, run gates",
+    )
+    vs_mode = vertical_slice_parser.add_mutually_exclusive_group(required=True)
+    vs_mode.add_argument(
+        "--demo",
+        action="store_true",
+        help="Use built-in todo CLI example (no LLM for docs)",
+    )
+    vs_mode.add_argument(
+        "--idea",
+        type=str,
+        default=None,
+        metavar="TEXT",
+        help="Generate docs from an idea via LLM (requires forge-policy.json LLM client)",
+    )
+    vertical_slice_parser.add_argument(
+        "--milestone-id",
+        type=int,
+        default=1,
+        help="Milestone to plan/apply (default: 1)",
+    )
+    vertical_slice_parser.add_argument(
+        "--planner",
+        choices=["deterministic", "llm"],
+        help="Planner for execution plan (default: from forge-policy.json)",
+    )
+    vs_gate_validate_group = vertical_slice_parser.add_mutually_exclusive_group()
+    vs_gate_validate_group.add_argument(
+        "--gate-validate",
+        action="store_true",
+        help="Run Forge Validation rules after apply (default: on)",
+    )
+    vs_gate_validate_group.add_argument(
+        "--no-gate-validate",
+        action="store_true",
+        help="Skip Forge Validation rules after apply",
+    )
+    vertical_slice_parser.add_argument(
+        "--gate-test-cmd",
+        type=str,
+        help="Shell command gate after apply (demo default: python examples/todo_cli.py)",
+    )
+    vertical_slice_parser.add_argument(
+        "--no-gate-test-cmd",
+        action="store_true",
+        help="Disable repository test command gate",
+    )
+    vertical_slice_parser.add_argument(
+        "--gate-test-timeout-seconds",
+        type=int,
+        help="Timeout for test command gate",
+    )
+    vertical_slice_parser.add_argument(
+        "--gate-test-output-max-chars",
+        type=int,
+        help="Max captured chars for test command gate",
+    )
+    vertical_slice_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+
     args = parser.parse_args()
 
-    if args.command not in {"init", "status"}:
+    if args.command not in {"init", "status", None}:
         is_valid, missing = Paths.project_validation()
         if not is_valid:
             print("Current directory is not an initialized Forge project.")
@@ -1178,6 +1291,37 @@ def main() -> int:
             gate_test_timeout_seconds=args.gate_test_timeout_seconds,
             gate_test_output_max_chars=args.gate_test_output_max_chars,
         ) else 1
+    elif args.command == "vertical-slice":
+        vs_gate_validate_override = (
+            True
+            if args.gate_validate
+            else False
+            if args.no_gate_validate
+            else None
+        )
+        if args.demo:
+            idea_text = None
+        else:
+            idea_text = (args.idea or "").strip()
+            if not idea_text:
+                print("vertical-slice: --idea must be non-empty.")
+                return 1
+        return (
+            0
+            if ForgeCLI.vertical_slice(
+                demo=bool(args.demo),
+                idea=idea_text,
+                milestone_id=args.milestone_id,
+                planner_mode=args.planner,
+                gate_validate=vs_gate_validate_override,
+                gate_test_cmd=args.gate_test_cmd,
+                disable_gate_test_cmd=args.no_gate_test_cmd,
+                gate_test_timeout_seconds=args.gate_test_timeout_seconds,
+                gate_test_output_max_chars=args.gate_test_output_max_chars,
+                json_mode=args.json,
+            )
+            else 1
+        )
     else:
         parser.print_help()
     return 0

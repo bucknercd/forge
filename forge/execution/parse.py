@@ -8,9 +8,15 @@ from forge.execution.models import (
     ActionReplaceSection,
     ActionAddDecision,
     ActionMarkMilestoneCompleted,
+    ActionWriteFile,
     ForgeAction,
 )
-from forge.execution.validation_rules import ForgeValidationRule, RuleFileContains, RuleSectionContains
+from forge.execution.validation_rules import (
+    ForgeValidationRule,
+    RuleFileContains,
+    RulePathFileContains,
+    RuleSectionContains,
+)
 
 TARGETS = frozenset({"requirements", "architecture", "decisions", "milestones"})
 
@@ -39,6 +45,35 @@ def parse_forge_action_line(
         return ActionMarkMilestoneCompleted()
 
     first = line.split(None, 1)[0].lower()
+    if first == "write_file":
+        if " | " not in line:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"write_file expects: write_file <rel_path> | <body>: {raw!r}",
+                    line_no,
+                )
+            )
+        left, body = line.split(" | ", 1)
+        lparts = left.split(None, 1)
+        if len(lparts) < 2:
+            raise ValueError(
+                _fmt_diag(
+                    "forge action",
+                    f"write_file missing relative path: {raw!r}",
+                    line_no,
+                )
+            )
+        rel_path = lparts[1].strip()
+        if not rel_path:
+            raise ValueError(
+                _fmt_diag("forge action", f"write_file empty path: {raw!r}", line_no)
+            )
+        body_resolved = (
+            body.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
+        )
+        return ActionWriteFile(rel_path=rel_path, body=body_resolved)
+
     if first == "add_decision":
         return _parse_add_decision(line, milestone)
 
@@ -125,12 +160,42 @@ def parse_forge_validation_line(raw: str, line_no: int | None = None) -> ForgeVa
         raise ValueError(_fmt_diag("forge validation", "Empty line.", line_no))
 
     parts = line.split()
-    if len(parts) < 2:
+    if len(parts) < 1:
         raise ValueError(
             _fmt_diag("forge validation", f"Invalid validation rule: {raw!r}", line_no)
         )
 
     kind = parts[0].lower()
+
+    if kind == "path_file_contains":
+        toks = line.split(None, 2)
+        if len(toks) < 3:
+            raise ValueError(
+                _fmt_diag(
+                    "forge validation",
+                    (
+                        "path_file_contains expects: path_file_contains "
+                        f"<rel_path> <substring>: {raw!r}"
+                    ),
+                    line_no,
+                )
+            )
+        _, relpath, substring = toks
+        if not relpath.strip() or not substring.strip():
+            raise ValueError(
+                _fmt_diag(
+                    "forge validation",
+                    f"path_file_contains needs non-empty path and substring: {raw!r}",
+                    line_no,
+                )
+            )
+        return RulePathFileContains(rel_path=relpath.strip(), substring=substring)
+
+    if len(parts) < 2:
+        raise ValueError(
+            _fmt_diag("forge validation", f"Invalid validation rule: {raw!r}", line_no)
+        )
+
     target = _parse_target(parts[1], line_no=line_no, kind="forge validation")
 
     if kind == "file_contains":

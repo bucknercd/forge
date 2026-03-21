@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from forge.execution.models import ExecutionPlan
+from forge.execution.models import ActionWriteFile, ExecutionPlan
+from forge.execution.safe_paths import resolve_safe_project_path
 from forge.paths import Paths
 
 
@@ -47,6 +48,11 @@ def target_paths_for_plan(plan: ExecutionPlan) -> list[Path]:
             targets.append(Paths.DECISIONS_FILE)
         elif t == "ActionMarkMilestoneCompleted":
             targets.append(Paths.MILESTONES_FILE)
+        elif isinstance(a, ActionWriteFile):
+            try:
+                targets.append(resolve_safe_project_path(a.rel_path, Paths.BASE_DIR))
+            except ValueError:
+                pass
     # Stable de-dupe preserve order
     out: list[Path] = []
     seen: set[str] = set()

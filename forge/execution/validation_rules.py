@@ -6,11 +6,20 @@ from typing import Literal, Union
 
 from forge.design_manager import Milestone
 from forge.execution import section_ops
+from forge.execution.safe_paths import resolve_safe_project_path
 
 
 @dataclass(frozen=True)
 class RuleFileContains:
     target: Literal["requirements", "architecture", "decisions", "milestones"]
+    substring: str
+
+
+@dataclass(frozen=True)
+class RulePathFileContains:
+    """Validate substring presence in a repo-relative file (bounded paths)."""
+
+    rel_path: str
     substring: str
 
 
@@ -21,7 +30,7 @@ class RuleSectionContains:
     substring: str
 
 
-ForgeValidationRule = Union[RuleFileContains, RuleSectionContains]
+ForgeValidationRule = Union[RuleFileContains, RulePathFileContains, RuleSectionContains]
 
 
 def resolve_target_path(
@@ -38,6 +47,21 @@ def resolve_target_path(
 
 
 def validate_rule(rule: ForgeValidationRule, paths_mod) -> tuple[bool, str]:
+    if isinstance(rule, RulePathFileContains):
+        try:
+            path = resolve_safe_project_path(rule.rel_path, paths_mod.BASE_DIR)
+        except ValueError as exc:
+            return False, f"path_file_contains failed: {exc}"
+        if not path.exists():
+            return False, f"path_file_contains failed: missing file {path}"
+        text = path.read_text(encoding="utf-8")
+        if rule.substring not in text:
+            return (
+                False,
+                f"path_file_contains failed: {path} missing substring {rule.substring!r}",
+            )
+        return True, ""
+
     path = resolve_target_path(rule.target, paths_mod)
     if not path.exists():
         return False, f"Expected file missing for validation: {path}"

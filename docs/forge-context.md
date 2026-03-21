@@ -181,7 +181,6 @@ Forge supports a high-level execution loop via `execute-next`.
 
 This enables iterative, state-aware project progression.
 
-
 ## LLM planner (optional)
 
 - Default remains **deterministic** planning from milestone `Forge Actions`.
@@ -193,24 +192,50 @@ This enables iterative, state-aware project progression.
 - `OpenAIChatClient` is the first real provider-backed implementation; additional providers can be added behind the same interface.
 
 
-## Next TODOs
+### Recently Shipped
+
+#### Vertical slice
+End-to-end flow is available via `forge vertical-slice`:
+
+- `--demo`: deterministic bundle (todo CLI under `examples/`), no LLM for docs
+- `--idea "..."`: LLM-generated vision + specs + milestones (requires `forge-policy.json` LLM client)
+
+Pipeline:
+materialize docs -> save reviewed plan -> apply -> validation gates
+
+Current file creation/edit support includes:
+- `write_file`
+- `path_file_contains`
+
+`write_file` is currently restricted to:
+- `examples/`
+- `src/`
+- `scripts/`
+- `tests/`
+
+See README Quick Start (vertical slice) for usage and expected behavior.
+
 
 ### Active TODO
 
-1. Improve code-oriented artifact execution
-   - expand bounded actions to better support code and config edits
-   - support common code transformations safely (insert, replace, update blocks)
-   - keep file mutation structured, minimal, and reviewable
-   - avoid unconstrained full-file rewrites
+1. Introduce structured/bounded code edit actions
+   - replace naive/full-file writes with minimal structured edits
+   - support insert/replace/update blocks safely
+   - improve diff visibility and reviewability
 
-### Upcoming TODOs
+### Next TODOs (Stabilization Phase)
 
-2. Add end-to-end regression coverage for full LLM workflows
-   - test milestone synthesis → plan → preview → apply → gates
-   - use mocked LLM responses for deterministic testing
-   - ensure failure modes remain safe and predictable
+2. Add end-to-end regression coverage
+   - test full workflows with mocked LLM responses
+   - ensure deterministic replay of milestone → plan → apply
+   - validate failure modes are safe
 
-3. Improve LLM plan and milestone quality heuristics
-   - refine weak-text detection heuristics
-   - improve redundancy detection beyond simple token overlap
-   - optionally introduce scoring or ranking for generated outputs
+3. Improve LLM output quality
+   - refine weak-text detection
+   - improve redundancy detection
+   - optionally add scoring/ranking of plans and milestones
+
+4. Strengthen validation gates
+   - expand test/lint/command validation
+   - improve failure feedback loop
+   - ensure bad outputs cannot silently pass
