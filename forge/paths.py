@@ -7,6 +7,7 @@ class Paths:
     BASE_DIR = Path.cwd()
     DOCS_DIR = BASE_DIR / "docs"
     SYSTEM_DIR = BASE_DIR / ".system"
+    FORGE_DIR = BASE_DIR / ".forge"
     ARTIFACTS_DIR = BASE_DIR / "artifacts"
     VISION_FILE = DOCS_DIR / "vision.txt"
     REQUIREMENTS_FILE = DOCS_DIR / "requirements.md"
@@ -25,6 +26,7 @@ class Paths:
         cls.BASE_DIR = root
         cls.DOCS_DIR = root / "docs"
         cls.SYSTEM_DIR = root / ".system"
+        cls.FORGE_DIR = root / ".forge"
         cls.ARTIFACTS_DIR = root / "artifacts"
         cls.VISION_FILE = cls.DOCS_DIR / "vision.txt"
         cls.REQUIREMENTS_FILE = cls.DOCS_DIR / "requirements.md"
@@ -38,7 +40,13 @@ class Paths:
         """Ensure base Forge directories exist for the current target project."""
         cls.DOCS_DIR.mkdir(parents=True, exist_ok=True)
         cls.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+        cls.FORGE_DIR.mkdir(parents=True, exist_ok=True)
         cls.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def forge_run_dir(cls, run_id: str) -> Path:
+        """Per-run directory under .forge/runs/<run_id>/."""
+        return cls.FORGE_DIR / "runs" / run_id
 
     @classmethod
     def required_directories(cls) -> list[Path]:

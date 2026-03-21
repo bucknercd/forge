@@ -15,6 +15,12 @@ from forge.execution.models import ActionAddDecision, ApplyResult, ExecutionPlan
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.apply import ArtifactActionApplier
 from forge.gate_runner import run_gates_for_milestone, summarize_gate_results
+from forge.run_events import (
+    PHASE_COMPLETED,
+    PHASE_STARTED,
+    PLAN_SAVED,
+    as_emitter,
+)
 from forge.planner import DeterministicPlanner, Planner
 from forge.reviewed_plan import (
     load_reviewed_plan,
@@ -172,6 +178,7 @@ class Executor:
         milestone_id: int,
         planner: Planner | None = None,
         review_enforcement: dict | None = None,
+        event_bus: object | None = None,
     ) -> dict:
         planner = planner or DeterministicPlanner()
         preview = Executor.preview_milestone(milestone_id, planner=planner)
@@ -192,8 +199,15 @@ class Executor:
                 review_enforcement=review_enforcement,
             )
             preview["plan_id"] = payload["plan_id"]
-            preview["plan_file"] = str((Paths.SYSTEM_DIR / "reviewed_plans" / f"{payload['plan_id']}.json"))
+            plan_path = Paths.SYSTEM_DIR / "reviewed_plans" / f"{payload['plan_id']}.json"
+            preview["plan_file"] = str(plan_path)
             preview["review_enforcement"] = payload.get("review_enforcement", review_enforcement or {})
+            as_emitter(event_bus).emit(
+                PLAN_SAVED,
+                plan_id=payload["plan_id"],
+                milestone_id=milestone_id,
+                plan_file=str(plan_path),
+            )
             return preview
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "message": f"Failed to save reviewed plan: {exc}"}
@@ -240,7 +254,9 @@ class Executor:
         test_command: str | None,
         test_timeout_seconds: int = 120,
         test_output_max_chars: int = 1200,
+        event_bus: object | None = None,
     ) -> dict:
+        bus = as_emitter(event_bus)
         payload = load_reviewed_plan(plan_id)
         if payload is None:
             return {"ok": False, "message": f"Reviewed plan '{plan_id}' not found."}
@@ -270,7 +286,21 @@ class Executor:
 
         reviewed_plan = ExecutionPlan.from_serializable(payload["plan"])
         applier = ArtifactActionApplier(Paths)
-        apply_result = applier.apply(reviewed_plan, milestone, dry_run=False)
+        bus.emit(PHASE_STARTED, phase="apply", label="execute reviewed plan")
+        apply_result = applier.apply(
+            reviewed_plan, milestone, dry_run=False, event_bus=bus
+        )
+        apply_ok = len(apply_result.errors) == 0
+        bus.emit(
+            PHASE_COMPLETED,
+            phase="apply",
+            ok=apply_ok,
+            message=(
+                apply_result.human_summary()
+                if apply_ok
+                else "; ".join(apply_result.errors)
+            ),
+        )
         # Persist a milestone result artifact so optional validation gate can
         # reuse the existing Validator contract.
         result_dir = Paths.SYSTEM_DIR / "results"
@@ -288,15 +318,25 @@ class Executor:
         }
         with milestone_result_file.open("w", encoding="utf-8") as file:
             json.dump(milestone_result_payload, file, indent=4)
+        run_any_gate = bool(run_validation_gate or test_command)
+        if run_any_gate:
+            bus.emit(PHASE_STARTED, phase="validation", label="post-apply gates")
         gates = run_gates_for_milestone(
             milestone_id,
             run_validation_gate=run_validation_gate,
             test_command=test_command,
             timeout_seconds=test_timeout_seconds,
             output_max_chars=test_output_max_chars,
+            event_bus=bus,
         )
         gates_ok = all(g.get("ok") for g in gates) if gates else True
-        apply_ok = len(apply_result.errors) == 0
+        if run_any_gate:
+            bus.emit(
+                PHASE_COMPLETED,
+                phase="validation",
+                ok=gates_ok,
+                message=summarize_gate_results(gates),
+            )
         ok_final = apply_ok and gates_ok
         gate_summary = summarize_gate_results(gates)
         artifact_summary = apply_result.human_summary()

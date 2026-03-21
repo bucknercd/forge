@@ -1,6 +1,8 @@
 # forge/cli.py
 
 import argparse
+import uuid
+
 from forge.vision import VisionManager
 from forge.design_manager import DesignManager
 from forge.decision_tracker import DecisionTracker
@@ -35,6 +37,13 @@ from forge.milestone_synthesis import (
     load_synthesized_milestones,
     synthesize_milestones,
 )
+from forge.run_event_handlers import (
+    CliProgressHandler,
+    EventListCollector,
+    JsonlRunLogHandler,
+    write_run_meta,
+)
+from forge.run_events import RunEventBus
 from forge.vertical_slice import run_vertical_slice
 
 
@@ -883,8 +892,29 @@ class ForgeCLI:
         gate_test_timeout_seconds: int | None = None,
         gate_test_output_max_chars: int | None = None,
         json_mode: bool = False,
+        verbose: bool = False,
     ) -> bool:
         """Idea → docs → reviewed plan → apply → validation gates (see `forge vertical-slice`)."""
+        run_id = uuid.uuid4().hex[:12]
+        run_dir = Paths.forge_run_dir(run_id)
+        events_path = run_dir / "events.jsonl"
+        collector = EventListCollector()
+        handlers: list = [JsonlRunLogHandler(events_path), collector]
+        if not json_mode:
+            handlers.insert(0, CliProgressHandler(verbose=verbose))
+        bus = RunEventBus(run_id, handlers)
+        write_run_meta(
+            run_dir,
+            {
+                "run_id": run_id,
+                "command": "vertical-slice",
+                "demo": demo,
+                "idea_provided": idea is not None,
+                "milestone_id": milestone_id,
+                "verbose": verbose,
+                "json_mode": json_mode,
+            },
+        )
         payload = run_vertical_slice(
             demo=demo,
             idea=idea,
@@ -895,28 +925,16 @@ class ForgeCLI:
             disable_gate_test_cmd=disable_gate_test_cmd,
             gate_test_timeout_seconds=gate_test_timeout_seconds,
             gate_test_output_max_chars=gate_test_output_max_chars,
+            event_bus=bus,
         )
+        payload["run_id"] = run_id
+        payload["run_log_dir"] = str(run_dir)
+        payload["events_path"] = str(events_path)
+        payload["events"] = collector.events
         if json_mode:
             print(json.dumps(payload, indent=2, sort_keys=True))
             return bool(payload.get("ok"))
-        print("Vertical slice:")
-        for s in payload.get("stages", []):
-            stage = s.get("stage", "?")
-            ok = bool(s.get("ok", False))
-            label = "OK" if ok else "FAIL"
-            print(f"- [{label}] {stage}")
-            msg = s.get("message")
-            if msg:
-                print(f"  {msg}")
-            if s.get("plan_id"):
-                print(f"  plan_id={s.get('plan_id')}")
-            if s.get("artifact_summary"):
-                print(f"  artifacts: {s.get('artifact_summary')}")
-            if s.get("gate_summary"):
-                print(f"  gates: {s.get('gate_summary')}")
-        if payload.get("plan_id"):
-            print(f"plan_id: {payload.get('plan_id')}")
-        print(f"Overall: {'success' if payload.get('ok') else 'failure'}")
+        print(f"Run log: {events_path}")
         return bool(payload.get("ok"))
 
     @staticmethod
@@ -1200,6 +1218,11 @@ def main() -> int:
         help="Max captured chars for test command gate",
     )
     vertical_slice_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="More detailed progress (still event-driven; not debug logging)",
+    )
+    vertical_slice_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
 
@@ -1319,6 +1342,7 @@ def main() -> int:
                 gate_test_timeout_seconds=args.gate_test_timeout_seconds,
                 gate_test_output_max_chars=args.gate_test_output_max_chars,
                 json_mode=args.json,
+                verbose=bool(getattr(args, "verbose", False)),
             )
             else 1
         )

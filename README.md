@@ -24,13 +24,22 @@ forge vertical-slice --demo
 4. Applies the plan (creates `examples/todo_cli.py`, appends to requirements, updates milestone status in `docs/milestones.md`).
 5. Runs **Forge Validation** (`path_file_contains`, `file_contains`) and the repo test gate **`python examples/todo_cli.py`** (demo default).
 
-You should see human output ending with `Overall: success`, and:
+**Progress output** is driven by a small **event bus** (not ad hoc `print` / logging): you’ll see phases (materialize, plan, apply, validation), each applied action (especially file paths), and gate results. It ends with **`Overall: success`** or **`Overall: failure`**.
+
+Each run also writes an inspectable log under **`.forge/runs/<run_id>/`**:
+
+- `run_meta.json` — command, flags, milestone id  
+- `events.jsonl` — one JSON object per line (`type`, `ts`, `run_id`, `data`)
+
+Use **`--verbose`** for a bit more detail (e.g. phase summaries). Use **`--json`** for a single machine-readable blob (includes the same `events` list plus `run_log_dir` / `events_path`).
+
+Then try:
 
 ```bash
 python examples/todo_cli.py --add "buy milk"
 ```
 
-should print a line like `Added todo: buy milk`.
+which should print a line like `Added todo: buy milk`.
 
 **JSON trace**
 

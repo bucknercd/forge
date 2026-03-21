@@ -215,6 +215,29 @@ Current file creation/edit support includes:
 
 See README Quick Start (vertical slice) for usage and expected behavior.
 
+#### Execution progress + run logs
+Forge now emits structured run events during vertical-slice execution.
+
+Current behavior:
+- human-readable progress in CLI output
+- structured event persistence under `.forge/runs/<run_id>/`
+- JSONL event log (`events.jsonl`)
+- `run_meta.json` metadata
+- `--json` output includes collected events and run paths
+
+Core event types include:
+- `run_started`
+- `phase_started`
+- `phase_completed`
+- `artifact_written`
+- `plan_saved`
+- `action_applied`
+- `validation_started`
+- `validation_completed`
+- `run_completed`
+- `run_failed`
+
+This improves visibility, debuggability, and future extensibility without coupling user-facing progress to Python logging.
 
 ### Active TODO
 

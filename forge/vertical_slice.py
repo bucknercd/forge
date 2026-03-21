@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from forge.design_manager import DesignManager, MilestoneService
 from forge.executor import Executor
@@ -22,6 +23,15 @@ from forge.policy_config import (
     merge_reviewed_apply_policy,
 )
 from forge.planner import Planner
+from forge.run_events import (
+    ARTIFACT_WRITTEN,
+    PHASE_COMPLETED,
+    PHASE_STARTED,
+    RUN_COMPLETED,
+    RUN_FAILED,
+    RUN_STARTED,
+    as_emitter,
+)
 from forge.vision import VisionManager
 
 
@@ -97,12 +107,34 @@ def demo_bundle() -> VerticalSliceBundle:
     )
 
 
-def materialize_bundle(bundle: VerticalSliceBundle) -> None:
+def _artifact_rel(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(Paths.BASE_DIR.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def materialize_bundle(
+    bundle: VerticalSliceBundle, *, event_bus: object | None = None
+) -> None:
+    bus = as_emitter(event_bus)
     Paths.ensure_project_structure()
     VisionManager.save_vision(bundle.vision)
+    bus.emit(ARTIFACT_WRITTEN, path=_artifact_rel(Paths.VISION_FILE), kind="vision")
     DesignManager.save_document(Paths.REQUIREMENTS_FILE, bundle.requirements_md)
+    bus.emit(
+        ARTIFACT_WRITTEN, path=_artifact_rel(Paths.REQUIREMENTS_FILE), kind="requirements"
+    )
     DesignManager.save_document(Paths.ARCHITECTURE_FILE, bundle.architecture_md)
+    bus.emit(
+        ARTIFACT_WRITTEN,
+        path=_artifact_rel(Paths.ARCHITECTURE_FILE),
+        kind="architecture",
+    )
     DesignManager.save_document(Paths.MILESTONES_FILE, bundle.milestones_md)
+    bus.emit(
+        ARTIFACT_WRITTEN, path=_artifact_rel(Paths.MILESTONES_FILE), kind="milestones"
+    )
     # Ensure milestones parse before planning
     MilestoneService.list_milestones()
 
@@ -176,6 +208,16 @@ def resolve_docs_llm_client() -> tuple[LLMClient | None, str | None]:
     return resolve_llm_client_from_policy(policy)
 
 
+def _failure_reason_from_apply(apply_res: dict) -> str:
+    msg = apply_res.get("message")
+    if msg:
+        return str(msg)
+    if not apply_res.get("apply_ok", True):
+        errs = apply_res.get("errors") or []
+        return "; ".join(str(e) for e in errs) or "apply failed"
+    return str(apply_res.get("gate_summary") or "validation failed")
+
+
 def run_vertical_slice(
     *,
     demo: bool,
@@ -187,17 +229,32 @@ def run_vertical_slice(
     disable_gate_test_cmd: bool,
     gate_test_timeout_seconds: int | None,
     gate_test_output_max_chars: int | None,
+    event_bus: object | None = None,
 ) -> dict:
     """
     Run materialize → save reviewed plan → apply with gates.
     Returns a dict with ok, stages (list), plan_id, etc.
     """
+    bus = as_emitter(event_bus)
     stages: list[dict] = []
+
+    bus.emit(
+        RUN_STARTED,
+        command="vertical-slice",
+        demo=demo,
+        has_idea=idea is not None,
+        milestone_id=milestone_id,
+    )
 
     try:
         if demo:
+            bus.emit(
+                PHASE_STARTED,
+                phase="materialize_docs",
+                label="write vision, requirements, architecture, milestones (demo)",
+            )
             bundle = demo_bundle()
-            materialize_bundle(bundle)
+            materialize_bundle(bundle, event_bus=bus)
             stages.append(
                 {
                     "stage": "materialize_docs",
@@ -206,19 +263,28 @@ def run_vertical_slice(
                     "message": "Wrote vision, requirements, architecture, milestones (demo bundle).",
                 }
             )
+            bus.emit(PHASE_COMPLETED, phase="materialize_docs", ok=True)
         else:
             assert idea is not None
             client, err = resolve_docs_llm_client()
             if err or client is None:
+                msg = err or "No LLM client available."
                 stages.append(
                     {
                         "stage": "materialize_docs",
                         "ok": False,
                         "mode": "idea",
-                        "message": err or "No LLM client available.",
+                        "message": msg,
                     }
                 )
+                bus.emit(RUN_FAILED, reason=msg, phase="materialize_docs")
+                bus.emit(RUN_COMPLETED, ok=False)
                 return _finalize(stages, ok=False)
+            bus.emit(
+                PHASE_STARTED,
+                phase="llm_generation",
+                label="generate specs and milestones from idea",
+            )
             try:
                 bundle = generate_bundle_from_llm(idea, client)
             except ValueError as exc:
@@ -230,18 +296,31 @@ def run_vertical_slice(
                         "message": str(exc),
                     }
                 )
+                bus.emit(PHASE_COMPLETED, phase="llm_generation", ok=False, message=str(exc))
+                bus.emit(RUN_FAILED, reason=str(exc), phase="llm_generation")
+                bus.emit(RUN_COMPLETED, ok=False)
                 return _finalize(stages, ok=False)
+            bus.emit(PHASE_COMPLETED, phase="llm_generation", ok=True)
+            bus.emit(
+                PHASE_STARTED,
+                phase="materialize_docs",
+                label="write vision, requirements, architecture, milestones",
+            )
             try:
-                materialize_bundle(bundle)
+                materialize_bundle(bundle, event_bus=bus)
             except OSError as exc:
+                msg = f"Failed to write docs: {exc}"
                 stages.append(
                     {
                         "stage": "materialize_docs",
                         "ok": False,
                         "mode": "idea",
-                        "message": f"Failed to write docs: {exc}",
+                        "message": msg,
                     }
                 )
+                bus.emit(PHASE_COMPLETED, phase="materialize_docs", ok=False, message=msg)
+                bus.emit(RUN_FAILED, reason=msg, phase="materialize_docs")
+                bus.emit(RUN_COMPLETED, ok=False)
                 return _finalize(stages, ok=False)
             stages.append(
                 {
@@ -251,6 +330,7 @@ def run_vertical_slice(
                     "message": "Wrote vision, requirements, architecture, milestones (LLM).",
                 }
             )
+            bus.emit(PHASE_COMPLETED, phase="materialize_docs", ok=True)
     except Exception as exc:  # noqa: BLE001
         stages.append(
             {
@@ -259,43 +339,64 @@ def run_vertical_slice(
                 "message": str(exc),
             }
         )
+        bus.emit(RUN_FAILED, reason=str(exc), phase="materialize_docs")
+        bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
     planner, eff_planner_policy, planner_err = resolve_planner(mode_override=planner_mode)
     if planner_err or planner is None or eff_planner_policy is None:
+        msg = planner_err or "Planner unavailable."
         stages.append(
             {
                 "stage": "preview_save_plan",
                 "ok": False,
-                "message": planner_err or "Planner unavailable.",
+                "message": msg,
             }
         )
+        bus.emit(RUN_FAILED, reason=msg, phase="plan")
+        bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
     enforcement = _review_enforcement_status(
         planner, eff_planner_policy, save_plan=True
     )
+    bus.emit(
+        PHASE_STARTED,
+        phase="plan",
+        label="preview milestone and save reviewed plan",
+    )
     preview = Executor.save_reviewed_plan_for_milestone(
-        milestone_id, planner=planner, review_enforcement=enforcement
+        milestone_id,
+        planner=planner,
+        review_enforcement=enforcement,
+        event_bus=bus,
     )
     stages.append({"stage": "preview_save_plan", **preview})
+    bus.emit(
+        PHASE_COMPLETED,
+        phase="plan",
+        ok=bool(preview.get("ok")),
+        message=preview.get("message"),
+    )
     if not preview.get("ok"):
+        reason = str(preview.get("message") or "plan preview or save failed")
+        bus.emit(RUN_FAILED, reason=reason, phase="plan")
+        bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
     plan_id = preview.get("plan_id")
     if not plan_id:
-        stages.append(
-            {
-                "stage": "apply_plan",
-                "ok": False,
-                "message": "No plan_id from preview/save step.",
-            }
-        )
+        msg = "No plan_id from preview/save step."
+        stages.append({"stage": "apply_plan", "ok": False, "message": msg})
+        bus.emit(RUN_FAILED, reason=msg, phase="plan")
+        bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
     base_policy, policy_err = load_reviewed_apply_policy()
     if policy_err:
         stages.append({"stage": "apply_plan", "ok": False, "message": policy_err})
+        bus.emit(RUN_FAILED, reason=policy_err, phase="apply_plan")
+        bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
     gv = gate_validate if gate_validate is not None else True
@@ -312,13 +413,10 @@ def run_vertical_slice(
         test_output_max_chars=gate_test_output_max_chars,
     )
     if resolved.test_timeout_seconds <= 0 or resolved.test_output_max_chars <= 0:
-        stages.append(
-            {
-                "stage": "apply_plan",
-                "ok": False,
-                "message": "Invalid gate timeout or output max chars.",
-            }
-        )
+        msg = "Invalid gate timeout or output max chars."
+        stages.append({"stage": "apply_plan", "ok": False, "message": msg})
+        bus.emit(RUN_FAILED, reason=msg, phase="apply_plan")
+        bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
     apply_res = Executor.apply_reviewed_plan_with_gates(
@@ -327,9 +425,17 @@ def run_vertical_slice(
         test_command=resolved.test_command,
         test_timeout_seconds=resolved.test_timeout_seconds,
         test_output_max_chars=resolved.test_output_max_chars,
+        event_bus=bus,
     )
     stages.append({"stage": "apply_plan", **apply_res})
     ok = bool(apply_res.get("ok"))
+    if not ok:
+        bus.emit(
+            RUN_FAILED,
+            reason=_failure_reason_from_apply(apply_res),
+            phase="apply_or_validation",
+        )
+    bus.emit(RUN_COMPLETED, ok=ok)
     return _finalize(stages, ok=ok, plan_id=plan_id)
 
 

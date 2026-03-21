@@ -25,6 +25,7 @@ from forge.execution.section_ops import (
 )
 from forge.execution.text_diff import unified_diff_bounded
 from forge.models import Decision
+from forge.run_events import ACTION_APPLIED, as_emitter
 
 
 def _action_type_name(action: Any) -> str:
@@ -63,21 +64,35 @@ class ArtifactActionApplier:
         return mapping[target]
 
     def apply(
-        self, plan: ExecutionPlan, milestone: Milestone, *, dry_run: bool = False
+        self,
+        plan: ExecutionPlan,
+        milestone: Milestone,
+        *,
+        dry_run: bool = False,
+        event_bus: Any = None,
     ) -> ApplyResult:
+        bus = as_emitter(event_bus)
         result = ApplyResult()
         for action in plan.actions:
             try:
-                self._apply_one(action, milestone, result, dry_run=dry_run)
+                self._apply_one(
+                    action, milestone, result, dry_run=dry_run, event_bus=bus
+                )
             except Exception as exc:  # noqa: BLE001 — surface as execution error string
                 err = str(exc)
                 result.errors.append(err)
-                result.actions_applied.append(
-                    {
-                        "type": _action_type_name(action),
-                        "outcome": "failed",
-                        "error": err,
-                    }
+                fail_entry = {
+                    "type": _action_type_name(action),
+                    "outcome": "failed",
+                    "error": err,
+                }
+                result.actions_applied.append(fail_entry)
+                bus.emit(
+                    ACTION_APPLIED,
+                    action_type=fail_entry["type"],
+                    target_path=fail_entry.get("path"),
+                    outcome="failed",
+                    error=err,
                 )
                 break
         return result
@@ -92,6 +107,7 @@ class ArtifactActionApplier:
         after: str,
         changed: bool,
         extra: dict[str, Any],
+        event_bus: Any = None,
     ) -> None:
         rel = self._rel(path)
         entry: dict[str, Any] = {
@@ -108,9 +124,23 @@ class ArtifactActionApplier:
             entry["diff"] = None
             entry["diff_truncated"] = False
         result.actions_applied.append(entry)
+        bus = as_emitter(event_bus)
+        bus.emit(
+            ACTION_APPLIED,
+            action_type=entry["type"],
+            target_path=entry.get("path"),
+            outcome=entry["outcome"],
+            error=entry.get("error"),
+        )
 
     def _apply_one(
-        self, action: Any, milestone: Milestone, result: ApplyResult, *, dry_run: bool
+        self,
+        action: Any,
+        milestone: Milestone,
+        result: ApplyResult,
+        *,
+        dry_run: bool,
+        event_bus: Any = None,
     ) -> None:
         if isinstance(action, ActionAppendSection):
             path = self._resolve(action.target)
@@ -144,6 +174,7 @@ class ArtifactActionApplier:
                     "target": action.target,
                     "section_heading": action.section_heading,
                 },
+                event_bus=event_bus,
             )
             return
 
@@ -179,6 +210,7 @@ class ArtifactActionApplier:
                     "target": action.target,
                     "section_heading": action.section_heading,
                 },
+                event_bus=event_bus,
             )
             return
 
@@ -218,6 +250,7 @@ class ArtifactActionApplier:
                 after=after,
                 changed=changed,
                 extra={"title": action.title},
+                event_bus=event_bus,
             )
             return
 
@@ -240,6 +273,7 @@ class ArtifactActionApplier:
                 after=new_content if changed else before,
                 changed=changed,
                 extra={},
+                event_bus=event_bus,
             )
             return
 
@@ -262,6 +296,7 @@ class ArtifactActionApplier:
                 after=after,
                 changed=changed,
                 extra={"rel_path": action.rel_path},
+                event_bus=event_bus,
             )
             return
 
