@@ -17,6 +17,7 @@ from forge.milestone_sync import sync_milestone_state
 from forge.milestone_state import normalize_milestone_state_value
 from forge.project_status import analyze_project_status
 from forge.execution.plan import ExecutionPlanBuilder
+from forge.cli_output import serialize_lint_result, serialize_preview_result
 
 class RunHistoryEntry:
     def __init__(self, task, summary, status, timestamp):
@@ -272,30 +273,57 @@ class ForgeCLI:
             print(f"Removed entries: {len(result['removed'])}")
 
     @staticmethod
-    def milestone_lint(milestone_id: int | None = None) -> bool:
+    def milestone_lint(milestone_id: int | None = None, json_mode: bool = False) -> bool:
         """Lint milestone action/validation definitions without executing actions."""
+        payload = ForgeCLI._collect_milestone_lint_result(milestone_id)
+        if json_mode:
+            print(json.dumps(serialize_lint_result(payload), indent=2, sort_keys=True))
+            return bool(payload.get("ok"))
+        ForgeCLI._print_lint_human(payload)
+        return bool(payload.get("ok"))
+
+    @staticmethod
+    def _collect_milestone_lint_result(milestone_id: int | None = None) -> dict:
         if not Paths.MILESTONES_FILE.exists():
-            print("Milestones file is missing.")
-            return False
+            return {
+                "command": "milestone-lint",
+                "ok": False,
+                "selected_milestone_id": milestone_id,
+                "checked": 0,
+                "total_errors": 1,
+                "milestones": [],
+                "message": "Milestones file is missing.",
+            }
 
         try:
             milestones = MilestoneService.list_milestones()
         except ValueError as exc:
-            print(f"Milestone definition error: {exc}")
-            print("Lint Summary: 1 error(s) across 0 milestone(s) checked.")
-            return False
+            return {
+                "command": "milestone-lint",
+                "ok": False,
+                "selected_milestone_id": milestone_id,
+                "checked": 0,
+                "total_errors": 1,
+                "milestones": [],
+                "message": f"Milestone definition error: {exc}",
+            }
 
         if milestone_id is not None:
             milestones = [m for m in milestones if m.id == milestone_id]
             if not milestones:
-                print(f"Milestone {milestone_id} not found.")
-                print("Lint Summary: 1 error(s) across 0 milestone(s) checked.")
-                return False
+                return {
+                    "command": "milestone-lint",
+                    "ok": False,
+                    "selected_milestone_id": milestone_id,
+                    "checked": 0,
+                    "total_errors": 1,
+                    "milestones": [],
+                    "message": f"Milestone {milestone_id} not found.",
+                }
 
         total_errors = 0
-        checked = 0
+        milestones_out: list[dict] = []
         for m in milestones:
-            checked += 1
             errors: list[str] = []
 
             if not m.forge_actions:
@@ -315,14 +343,43 @@ class ForgeCLI:
 
             if errors:
                 total_errors += len(errors)
-                print(f"[FAIL] Milestone {m.id}: {m.title}")
-                for e in errors:
-                    print(f"  - {e}")
-            else:
-                print(f"[OK] Milestone {m.id}: {m.title}")
+            milestones_out.append(
+                {
+                    "milestone_id": m.id,
+                    "title": m.title,
+                    "ok": len(errors) == 0,
+                    "errors": errors,
+                }
+            )
+        return {
+            "command": "milestone-lint",
+            "ok": total_errors == 0,
+            "selected_milestone_id": milestone_id,
+            "checked": len(milestones),
+            "total_errors": total_errors,
+            "milestones": milestones_out,
+            "message": "",
+        }
 
-        print(f"Lint Summary: {total_errors} error(s) across {checked} milestone(s) checked.")
-        return total_errors == 0
+    @staticmethod
+    def _print_lint_human(payload: dict) -> None:
+        message = payload.get("message")
+        milestones = payload.get("milestones", [])
+        if message and not milestones:
+            print(message)
+            print("Lint Summary: 1 error(s) across 0 milestone(s) checked.")
+            return
+        for m in milestones:
+            if m.get("ok"):
+                print(f"[OK] Milestone {m['milestone_id']}: {m['title']}")
+            else:
+                print(f"[FAIL] Milestone {m['milestone_id']}: {m['title']}")
+                for e in m.get("errors", []):
+                    print(f"  - {e}")
+        print(
+            "Lint Summary: "
+            f"{payload.get('total_errors', 0)} error(s) across {payload.get('checked', 0)} milestone(s) checked."
+        )
 
     @staticmethod
     def execute_next():
@@ -336,12 +393,15 @@ class ForgeCLI:
             print(f"Milestone ID: {milestone_id}")
 
     @staticmethod
-    def milestone_preview(milestone_id: int | None = None):
+    def milestone_preview(milestone_id: int | None = None, json_mode: bool = False):
         """Dry-run preview of milestone execution (no writes)."""
         if milestone_id is None:
             result = Executor.preview_next()
         else:
             result = Executor.preview_milestone(milestone_id)
+        if json_mode:
+            print(json.dumps(serialize_preview_result(result), indent=2, sort_keys=True))
+            return
 
         if not result.get("ok"):
             print(result.get("message", "Preview unavailable."))
@@ -408,11 +468,17 @@ def main() -> int:
     milestone_preview_parser.add_argument(
         "id", nargs="?", type=int, help="Optional milestone ID to preview"
     )
+    milestone_preview_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
     milestone_lint_parser = subparsers.add_parser(
         "milestone-lint", help="Lint milestone execution definitions"
     )
     milestone_lint_parser.add_argument(
         "id", nargs="?", type=int, help="Optional milestone ID to lint"
+    )
+    milestone_lint_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     subparsers.add_parser("execute-next", help="Execute the next eligible milestone")
 
@@ -452,9 +518,9 @@ def main() -> int:
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
     elif args.command == "milestone-preview":
-        ForgeCLI.milestone_preview(args.id)
+        ForgeCLI.milestone_preview(args.id, json_mode=args.json)
     elif args.command == "milestone-lint":
-        return 0 if ForgeCLI.milestone_lint(args.id) else 1
+        return 0 if ForgeCLI.milestone_lint(args.id, json_mode=args.json) else 1
     elif args.command == "execute-next":
         ForgeCLI.execute_next()
     else:

@@ -176,14 +176,15 @@ This enables iterative, state-aware project progression.
 
 ## Next TODO
 
-Add machine-readable output modes for lint and preview.
+Add an approval/apply workflow for milestone execution.
 
-- support JSON output for `forge milestone-lint`
-- support JSON output for `forge milestone-preview`
-- preserve current human-readable output as the default
-- include milestone metadata, diagnostics, artifact summaries, action outcomes, and bounded diffs where applicable
-- keep output deterministic and stable for automation use
-- avoid side effects for lint and preview commands
+- support generating a previewed execution plan that can be explicitly approved before apply
+- allow applying a specific reviewed plan instead of regenerating execution implicitly
+- keep approval/apply deterministic and file-based
+- preserve existing execution behavior for direct runs
+- ensure applied plans match reviewed plans
+- surface clear errors when a plan is stale or invalid
+- keep JSON and human-readable output support for the workflow
 
 Goal:
-Make Forge easy to integrate with CI, scripts, editor tooling, and future higher-level orchestration.
+Make milestone execution safer and more intentional by separating preview from apply.

@@ -97,3 +97,40 @@ def test_cli_milestone_preview_specific_and_next(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / ".system" / "results" / "milestone_1.json").exists()
     state_file = tmp_path / ".system" / "milestone_state.json"
     assert (not state_file.exists()) or (state_file.read_text(encoding="utf-8").strip() == "")
+
+
+def test_cli_milestone_preview_json_mode(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    assert main() == 0
+    _ = capsys.readouterr().out
+
+    (tmp_path / "docs" / "milestones.md").write_text(
+        f"""
+# Milestones
+
+## Milestone 1: First
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+{forge_block("CLI_PREVIEW_JSON")}
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--json"])
+    assert main() == 0
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert payload["command"] == "milestone-preview"
+    assert payload["ok"] is True
+    assert payload["milestone_id"] == 1
+    assert payload["artifact_summary"]
+    assert payload["targeted_artifacts"]
+    assert payload["planned_actions"]
+    assert payload["actions_applied"]
+    assert "summary_counts" in payload
+    assert "changed" in payload["summary_counts"]
+
+    # Still no side effects in json preview mode.
+    assert not (tmp_path / ".system" / "results" / "milestone_1.json").exists()

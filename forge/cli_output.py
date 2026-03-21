@@ -1,0 +1,50 @@
+"""Stable machine-readable output serializers for CLI commands."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def serialize_lint_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize lint payload into a stable schema for automation.
+    Expects keys: ok, command, selected_milestone_id, checked, total_errors, milestones, message?
+    """
+    return {
+        "command": "milestone-lint",
+        "ok": bool(payload.get("ok", False)),
+        "selected_milestone_id": payload.get("selected_milestone_id"),
+        "checked_milestones": int(payload.get("checked", 0)),
+        "total_errors": int(payload.get("total_errors", 0)),
+        "milestones": payload.get("milestones", []),
+        "message": payload.get("message", ""),
+    }
+
+
+def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize preview payload into a stable schema for automation.
+    Expects executor preview result fields.
+    """
+    return {
+        "command": "milestone-preview",
+        "ok": bool(payload.get("ok", False)),
+        "milestone_id": payload.get("milestone_id"),
+        "title": payload.get("title"),
+        "message": payload.get("message", ""),
+        "artifact_summary": payload.get("artifact_summary", ""),
+        "targeted_artifacts": payload.get("files_changed", []),
+        "planned_actions": payload.get("execution_plan", {}).get("actions", []),
+        "actions_applied": payload.get("actions_applied", []),
+        "errors": payload.get("errors", []),
+        "summary_counts": _summary_counts(payload.get("actions_applied", [])),
+    }
+
+
+def _summary_counts(actions_applied: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"changed": 0, "skipped": 0, "failed": 0}
+    for action in actions_applied:
+        outcome = action.get("outcome")
+        if outcome in counts:
+            counts[outcome] += 1
+    return counts
