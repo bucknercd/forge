@@ -1,6 +1,7 @@
 # forge/cli.py
 
 import argparse
+import os
 import uuid
 from dataclasses import asdict
 
@@ -166,6 +167,78 @@ class ForgeCLI:
                 print(f"  {ts}  [{st}] {task}: {summary}")
 
     @staticmethod
+    def project_start():
+        """Bootstrap if needed, then print a short guided workflow."""
+        ok, missing = Paths.project_validation()
+        if not ok:
+            ForgeCLI.init()
+            ok, missing = Paths.project_validation()
+        if not ok:
+            print("Project still incomplete after init. Missing:")
+            for p in missing or []:
+                print(f"  - {p}")
+            return
+        print("Forge is ready.\n")
+        print("Common commands:")
+        print("  forge build              # vertical slice (default: demo bundle)")
+        print("  forge build --idea \"…\"   # LLM docs from idea (needs policy + API key)")
+        print("  forge run-next | forge fix   # next task / repair loop")
+        print("  forge status             # milestones + next task hint")
+        print("  forge doctor             # policy / environment checks")
+        print("  forge logs               # recent history + run artifact dirs")
+
+    @staticmethod
+    def project_doctor():
+        """Non-secret checks for repo + policy + LLM readiness."""
+        print("Forge doctor:")
+        ok, missing = Paths.project_validation()
+        if ok:
+            print("- Project layout: OK")
+        else:
+            print("- Project layout: incomplete")
+            for p in missing or []:
+                print(f"    missing: {p}")
+        pol = Paths.BASE_DIR / "forge-policy.json"
+        if pol.exists():
+            print(f"- forge-policy.json: present ({pol})")
+            pp, err = load_planner_policy()
+            if err:
+                print(f"  planner policy error: {err}")
+            else:
+                print(
+                    f"  planner.mode={pp.mode!r} llm_client={pp.llm_client!r} "
+                    f"model={pp.llm_model!r}"
+                )
+                if pp.mode == "llm" and pp.llm_client == "openai":
+                    if os.environ.get("OPENAI_API_KEY"):
+                        print("  OPENAI_API_KEY: set")
+                    else:
+                        print("  OPENAI_API_KEY: not set (required for openai client)")
+        else:
+            print("- forge-policy.json: missing (defaults used; LLM needs explicit policy)")
+        if Paths.MILESTONES_FILE.exists():
+            print("- docs/milestones.md: present")
+        else:
+            print("- docs/milestones.md: missing")
+
+    @staticmethod
+    def project_logs(limit: int = 10):
+        """Run history plus recent vertical-slice run directories."""
+        ForgeCLI.run_history(limit=max(1, limit))
+        runs_root = Paths.FORGE_DIR / "runs"
+        if runs_root.is_dir():
+            dirs = sorted(
+                runs_root.iterdir(),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )[:5]
+            if dirs:
+                print("Recent .forge/runs/ (newest first):")
+                for d in dirs:
+                    if d.is_dir():
+                        print(f"  {d}  (events.jsonl, llm_bundle_raw_*.txt, …)")
+
+    @staticmethod
     def status():
         """Show current repository state."""
         report = analyze_project_status()
@@ -209,6 +282,30 @@ class ForgeCLI:
                     status = "not_started"
                     attempts = 0
                 print(f"  Milestone {milestone_id}: status={status}, attempts={attempts}")
+
+        if Paths.MILESTONES_FILE.exists():
+            try:
+                repo = MilestoneStateRepository(Paths.SYSTEM_DIR / "milestone_state.json")
+                selector = MilestoneSelector(MilestoneService, repo)
+                nm, rep = selector.get_next_milestone_with_report()
+                print("- Next work (roadmap selector):")
+                if nm is None:
+                    print(f"  ({rep.get('kind', 'none')})")
+                else:
+                    print(f"  Milestone {nm.id}: {nm.title} [{rep.get('kind')}]")
+                    nxt = get_next_task(nm.id)
+                    if nxt:
+                        print(
+                            f"  Next pending task: {nxt.id} — "
+                            f"{(nxt.title or '')[:100]}"
+                        )
+                    else:
+                        print(
+                            "  Next task: none pending "
+                            "(use `forge task-expand --milestone <id>` if needed)"
+                        )
+            except Exception as exc:  # noqa: BLE001
+                print(f"- Next work: unavailable ({exc})")
 
     @staticmethod
     def design_show():
@@ -1516,6 +1613,89 @@ def main() -> int:
     # Init command
     subparsers.add_parser("init", help="Bootstrap expected directories and files")
 
+    subparsers.add_parser(
+        "start",
+        help="Initialize if needed and print common next steps (guided workflow)",
+    )
+
+    build_parser = subparsers.add_parser(
+        "build",
+        help="Happy path: vertical slice (default: demo bundle; use --idea / vision for LLM)",
+    )
+    build_parser.add_argument(
+        "--no-demo",
+        action="store_true",
+        help="Do not use the built-in demo; requires --idea, --vision-file, or --from-vision",
+    )
+    build_parser.add_argument(
+        "--idea",
+        type=str,
+        default=None,
+        metavar="TEXT",
+        help="LLM: generate vision + docs from this idea",
+    )
+    build_parser.add_argument(
+        "--vision-file",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="LLM: load vision from file; model generates requirements/architecture/milestones",
+    )
+    build_parser.add_argument(
+        "--from-vision",
+        action="store_true",
+        help="LLM: load vision from docs/vision.txt",
+    )
+    build_parser.add_argument(
+        "--milestone-id",
+        type=int,
+        default=1,
+        help="Milestone to plan/apply (default: 1)",
+    )
+    build_parser.add_argument(
+        "--planner",
+        choices=["deterministic", "llm"],
+        help="Planner override (default: forge-policy.json)",
+    )
+    b_gv = build_parser.add_mutually_exclusive_group()
+    b_gv.add_argument(
+        "--gate-validate",
+        action="store_true",
+        help="Run Forge Validation after apply",
+    )
+    b_gv.add_argument(
+        "--no-gate-validate",
+        action="store_true",
+        help="Skip Forge Validation after apply",
+    )
+    build_parser.add_argument("--gate-test-cmd", type=str, default=None)
+    build_parser.add_argument("--no-gate-test-cmd", action="store_true")
+    build_parser.add_argument("--gate-test-timeout-seconds", type=int, default=None)
+    build_parser.add_argument("--gate-test-output-max-chars", type=int, default=None)
+    build_parser.add_argument("--verbose", action="store_true")
+    build_parser.add_argument("--json", action="store_true")
+
+    subparsers.add_parser(
+        "fix",
+        help="Run or repair the next pending task (alias for run-next)",
+    )
+
+    subparsers.add_parser(
+        "doctor",
+        help="Check project layout, forge-policy.json, and LLM environment",
+    )
+
+    logs_parser = subparsers.add_parser(
+        "logs",
+        help="Show recent run history and latest .forge/runs directories",
+    )
+    logs_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Max run-history lines (default: 10)",
+    )
+
     # Status command
     subparsers.add_parser("status", help="Show current repository state")
 
@@ -1874,7 +2054,7 @@ def main() -> int:
 
     args = parser.parse_args(argv[1:] if len(argv) > 1 else [])
 
-    if args.command not in {"init", "status", None}:
+    if args.command not in {"init", "status", "start", "doctor", None}:
         is_valid, missing = Paths.project_validation()
         if not is_valid:
             print("Current directory is not an initialized Forge project.")
@@ -1887,6 +2067,74 @@ def main() -> int:
 
     if args.command == "init":
         ForgeCLI.init()
+    elif args.command == "start":
+        ForgeCLI.project_start()
+    elif args.command == "doctor":
+        ForgeCLI.project_doctor()
+    elif args.command == "logs":
+        ForgeCLI.project_logs(limit=args.limit)
+    elif args.command == "fix":
+        ForgeCLI.execute_next()
+    elif args.command == "build":
+        has_llm = bool(args.idea or args.vision_file or args.from_vision)
+        if args.no_demo and not has_llm:
+            print(
+                "forge build: use --idea, --vision-file, or --from-vision with --no-demo.",
+                file=sys.stderr,
+            )
+            return 1
+        use_demo = not has_llm and not args.no_demo
+        idea_text = None
+        fixed_vision_text = None
+        if use_demo:
+            if args.idea or args.vision_file or args.from_vision:
+                print(
+                    "forge build: do not combine --demo (default) with idea/vision flags.",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            if args.idea:
+                idea_text = args.idea.strip()
+            elif args.vision_file:
+                vpath = resolve_vision_file_path(args.vision_file, base_dir=Paths.BASE_DIR)
+                try:
+                    fixed_vision_text = read_vision_file_text(vpath)
+                except (OSError, ValueError) as exc:
+                    print(f"forge build: {exc}", file=sys.stderr)
+                    return 1
+            elif args.from_vision:
+                vpath = Paths.VISION_FILE
+                try:
+                    fixed_vision_text = read_vision_file_text(vpath)
+                except (OSError, ValueError) as exc:
+                    print(f"forge build: {exc}", file=sys.stderr)
+                    return 1
+        gv = (
+            True
+            if args.gate_validate
+            else False
+            if args.no_gate_validate
+            else None
+        )
+        return (
+            0
+            if ForgeCLI.vertical_slice(
+                demo=use_demo,
+                idea=idea_text,
+                fixed_vision=fixed_vision_text,
+                milestone_id=args.milestone_id,
+                planner_mode=args.planner,
+                gate_validate=gv,
+                gate_test_cmd=args.gate_test_cmd,
+                disable_gate_test_cmd=args.no_gate_test_cmd,
+                gate_test_timeout_seconds=args.gate_test_timeout_seconds,
+                gate_test_output_max_chars=args.gate_test_output_max_chars,
+                json_mode=args.json,
+                verbose=args.verbose,
+            )
+            else 1
+        )
     elif args.command == "status":
         ForgeCLI.status()
     elif args.command == "design-show":

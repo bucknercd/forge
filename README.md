@@ -15,6 +15,21 @@ You start with intent—a short phrase, a vision file, or the demo. Forge (optio
 
 **CLI:** Milestones are **roadmap-only** (no first-class “execute this milestone” command). Execution is **task-first** (`task-preview`, `task-apply-plan`, `run-next`, `vertical-slice`, `workflow-guarded`, …). For a transition period, older names (`milestone-preview`, `milestone-apply-plan`, `execute-next`, plus deprecated `milestone-execute` / `milestone-retry`) still work: Forge prints a **stderr** deprecation notice and routes to the same task behavior.
 
+### Simple CLI shortcuts (orchestration layer)
+
+Higher-level commands wrap the same engine; granular subcommands stay available:
+
+| Command | Role |
+|--------|------|
+| **`forge start`** | `init` if needed, then print a short guided workflow. |
+| **`forge build`** | **`vertical-slice`**: default **demo** bundle; use **`--idea`**, **`--vision-file`**, or **`--from-vision`** for LLM (with **`--no-demo`** when forcing non-demo). |
+| **`forge fix`** | Alias for **`run-next`** (next task / repair loop). |
+| **`forge status`** | Repo readiness + milestone state + **next milestone / task** hint. |
+| **`forge doctor`** | Layout, **`forge-policy.json`**, planner mode, **`OPENAI_API_KEY`** hint. |
+| **`forge logs`** | Recent **`run-history`** + newest **`.forge/runs/`** dirs. |
+
+**Repair loop:** failures are **classified** (e.g. `syntax_fix`, `behavior_fix`, `format_fix`, `no_op_repair`) into structured metadata under **`.system/task_feedback/`**; the next LLM planner prompt gets a **mode-specific** instruction block (not a single generic retry paragraph). **No-op:** if the **previous** failure was **apply** and the new reviewed **plan hash** is unchanged, Forge stops early and asks for human review (gate-only failures may still re-apply the same plan so flaky or mocked gates can progress).
+
 ---
 
 ## The pipeline

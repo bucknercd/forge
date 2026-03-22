@@ -76,6 +76,8 @@ def serialize_apply_plan_result(payload: dict[str, Any]) -> dict[str, Any]:
         "warnings": payload.get("warnings", []),
         "errors": payload.get("errors", []),
         "summary_counts": _summary_counts(payload.get("actions_applied", [])),
+        "failure_classification": payload.get("failure_classification"),
+        "repair_stopped_reason": payload.get("repair_stopped_reason"),
     }
 
 

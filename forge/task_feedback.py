@@ -44,13 +44,15 @@ def build_repair_context(
     apply_ok: bool = True,
     artifact_test_path: str | None = None,
     extra_message: str | None = None,
+    classification: dict[str, Any] | None = None,
+    repair_mode: str | None = None,
 ) -> dict[str, Any]:
     """
     Structured context for the next planner call (esp. LLM).
 
     ``attempt`` is 1-based; the first plan uses ``repair_context=None``.
     """
-    return {
+    ctx: dict[str, Any] = {
         "milestone_id": milestone_id,
         "task_id": task_id,
         "previous_attempt": attempt,
@@ -60,14 +62,40 @@ def build_repair_context(
         "artifact_test_path": artifact_test_path,
         "extra_message": extra_message,
     }
+    if classification is not None:
+        ctx["classification"] = classification
+    if repair_mode is not None:
+        ctx["repair_mode"] = repair_mode
+    return ctx
 
 
 def repair_context_to_prompt_appendix(ctx: dict[str, Any]) -> str:
     """Plain-text block appended to LLM planner prompts when repairing."""
+    from forge.failure_classification import FailureClassification
+    from forge.repair_prompts import repair_mode_prompt_block
+
     lines = [
         "\n---\nPREVIOUS ATTEMPT FAILED — produce a revised action list for the SAME task.\n",
         f"Previous attempt number: {ctx.get('previous_attempt')}\n",
     ]
+    cls_raw = ctx.get("classification")
+    if isinstance(cls_raw, dict) and cls_raw.get("mode"):
+        try:
+            ph = cls_raw.get("phase", "gates")
+            if ph not in ("apply", "gates"):
+                ph = "gates"
+            fc = FailureClassification(
+                mode=cls_raw["mode"],
+                phase=ph,
+                signals=tuple(cls_raw.get("signals") or ()),
+                details=dict(cls_raw.get("details") or {}),
+            )
+            lines.append(repair_mode_prompt_block(fc))
+        except (TypeError, ValueError):
+            lines.append(f"(classification metadata present but invalid: {cls_raw!r})\n")
+    elif ctx.get("repair_mode"):
+        lines.append(f"(repair_mode hint: {ctx.get('repair_mode')!r})\n")
+
     if ctx.get("apply_errors"):
         lines.append("Apply-phase errors:\n")
         for e in ctx["apply_errors"]:
@@ -93,6 +121,6 @@ def repair_context_to_prompt_appendix(ctx: dict[str, Any]) -> str:
     if ctx.get("extra_message"):
         lines.append(f"Note: {ctx['extra_message']}\n")
     lines.append(
-        "\nRevise the plan to fix the failure. Keep changes minimal and bounded to allowed paths.\n"
+        "\nFollow the repair mode constraints above. Keep changes minimal and bounded to allowed paths.\n"
     )
     return "".join(lines)

@@ -218,6 +218,10 @@ See README Quick Start (vertical slice) for usage and expected behavior.
 
 **LLM bundle JSON (internal):** The model is asked for a single `json.loads`-parseable object (not user-facing UX). Extraction tolerates harmless noise (leading/trailing prose, a single markdown fenced JSON block, or the longest unambiguous balanced `{...}`). Ambiguous output (e.g. two same-length top-level objects) or invalid JSON is rejected; failures persist `llm_bundle_raw_*.txt` and optional `llm_bundle_extract_debug_*.txt` under the run artifact dir for debugging.
 
+**Task repair classification:** On apply or gate failure, Forge records a small **repair mode** (`syntax_fix`, `behavior_fix`, `format_fix`, `missing_impl`, `validation_bug`, `planner_output_bug`, `no_op_repair`, `unknown_failure`) in `.system/task_feedback/` and appends a **mode-specific** block to the next LLM planner prompt (`forge/failure_classification.py`, `forge/repair_prompts.py`). Identical replans after an **apply** failure short-circuit with `no_op_repair`; identical plans after **gate** failure still re-run apply so external or mocked gates can change.
+
+**Simple CLI:** `forge start`, `forge build`, `forge fix`, `forge doctor`, `forge logs` are thin wrappers over `init` / `vertical-slice` / `run-next` / diagnostics; see README “Simple CLI shortcuts”.
+
 #### Tasks (two-layer planning)
 - **Execution is task-only:** preview, save-plan, **`run-next`**, **`vertical-slice`**, and **`workflow-guarded`** ensure **`.system/tasks/m<id>.json`** exists (same expansion as **`forge task-expand`**) and operate on a **task id**—explicit **`--task`** or the **next pending task**. Milestones in **`docs/milestones.md`** are not executed directly.
 - Task JSON holds **2–6 ordered tasks** when deterministic splitting succeeds (`mark_milestone_completed` + validation on the last task); optional LLM JSON expansion when a non-stub OpenAI client is configured; else **one compatibility task**. **`--force`** on **`task-expand`** regenerates from the current milestone text.
@@ -253,29 +257,68 @@ Practical, code-oriented bounded editing (still stdlib-only, no AST):
 
 ### Active TODO
 
-1. Policy, normalization, and orchestration polish
-   - add safe normalization/canonicalization at LLM boundaries before execution
-   - optional limits (per-run file touches, path classes) and stricter review defaults where needed
-   - reuse run-event + JSONL patterns on `task-apply-plan` / workflow paths
-   - further reduce reliance on fragile freeform actions in incremental milestones
-   - ensure executor only consumes canonical validated actions
+1. Shift Forge toward an automated dev-loop runner
+   - move from generic retry to explicit failure classification
+   - introduce repair modes (`format_fix`, `syntax_fix`, `behavior_fix`, `missing_impl`, `validation_bug`, `no_op_repair`, `unknown_failure`)
+   - generate targeted repair prompts based on failure type
+   - keep human escalation only for repeated or ambiguous failures
+
+2. Preserve strict core / tolerant boundary architecture
+   - tolerate harmless LLM formatting noise only at ingestion boundaries
+   - normalize into canonical internal actions/plans
+   - keep executor deterministic and strict
+   - persist raw artifacts for every failed boundary
+
+3. Strengthen success criteria
+   - prevent structural stubs from passing as completed work
+   - improve generated validations toward behavioral checks where feasible
+   - detect placeholder/stub outputs explicitly
+   - distinguish “compiles” from “works”
+
+4. Simplify top-level CLI UX
+   - add high-level commands for common workflows
+   - keep existing granular/power-user commands available
+   - reduce need to understand internal workflow names for basic usage
 
 ### Next TODOs (Stabilization Phase)
 
-2. Add end-to-end regression coverage
-   - test full workflows with mocked and sloppy LLM responses
-   - ensure deterministic replay of normalized milestone → plan → apply
-   - validate recoverable vs non-recoverable failure modes
-   - ensure raw planner/milestone artifacts are persisted on failure
+5. Add failure classification and repair-mode engine
+   - deterministic classifier over validation/test/parser/planner failures
+   - structured failure metadata persisted with runs
+   - targeted repair prompts per failure type
+   - stop generic blind retry loops
 
-3. Improve LLM output quality
-   - refine weak-text detection
-   - improve redundancy detection
-   - tighten prompts around supported action grammar
-   - optionally add scoring/ranking of plans and milestones
+6. Detect and stop no-op repair loops
+   - compare plan IDs, action sets, file hashes, and validation outcomes
+   - surface “no effective change” clearly
+   - escalate earlier instead of wasting retries
 
-4. Strengthen validation gates
-   - expand test/lint/command validation
-   - improve failure feedback loop
-   - ensure bad outputs cannot silently pass
-   - detect and surface no-op repair loops clearly
+7. Improve behavioral validation generation
+   - synthesize stronger tests for simple CLI/file-processing tasks
+   - prefer behavioral assertions over shape-only checks
+   - ensure stub implementations fail
+
+8. Improve planner and milestone robustness
+   - continue reducing fragile action shapes
+   - prefer bounded edits or safer canonical actions where appropriate
+   - keep internal transport formats strict and machine-only
+
+9. Add end-to-end regression coverage
+   - full workflow tests with mocked/sloppy LLM outputs
+   - deterministic replay of normalized milestone → plan → apply → validate
+   - regression tests for previously observed boundary failures
+   - artifact persistence on all failure classes
+
+10. Introduce simplified CLI commands
+   - `forge start`
+   - `forge build`
+   - `forge fix`
+   - `forge status`
+   - `forge doctor`
+   - `forge logs`
+
+11. Improve observability
+   - run summaries with failure classification
+   - show latest artifact paths and reviewed plans
+   - record repair mode chosen and why
+   - make internal debugging rich without exposing ugly internals to end users

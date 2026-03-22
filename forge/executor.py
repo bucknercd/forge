@@ -32,6 +32,11 @@ from forge.policy_config import (
     load_reviewed_apply_policy,
     load_task_execution_policy,
 )
+from forge.failure_classification import (
+    FailureClassification,
+    classify_repair_failure,
+    detect_identical_repair_plan,
+)
 from forge.task_feedback import build_repair_context, persist_task_feedback
 from forge.run_events import (
     PHASE_COMPLETED,
@@ -414,6 +419,9 @@ class Executor:
         last_message = ""
         last_plan_id: str | None = None
         last_gate_results: list[dict[str, Any]] = []
+        prev_plan_hash: str | None = None
+        last_failure_phase: str | None = None
+        last_failure_classification: dict[str, Any] | None = None
 
         for attempt in range(1, max_rep + 1):
             use_initial = bool(initial_plan_id and attempt == 1)
@@ -482,6 +490,72 @@ class Executor:
                     }
 
             last_plan_id = plan_id
+            stored_plan = load_reviewed_plan(plan_id)
+            curr_plan_hash = (
+                str(stored_plan.get("plan_hash")) if stored_plan else None
+            ) or None
+            planner_meta = (
+                (stored_plan.get("planner_metadata") or {})
+                if stored_plan
+                else {}
+            )
+
+            # Same reviewed plan cannot fix a gate failure without changing the world
+            # (e.g. external mocks), so we only short-circuit when the *previous* failure
+            # was in apply — identical replan is provably redundant there.
+            if (
+                detect_identical_repair_plan(
+                    attempt=attempt,
+                    previous_plan_hash=prev_plan_hash,
+                    current_plan_hash=curr_plan_hash,
+                )
+                and last_failure_phase == "apply"
+            ):
+                fc = FailureClassification(
+                    "no_op_repair",
+                    "apply",
+                    ("identical_plan_hash",),
+                    {
+                        "plan_hash_prefix": (curr_plan_hash or "")[:20],
+                        "attempt": attempt,
+                    },
+                )
+                last_failure_classification = fc.to_dict()
+                persist_task_feedback(
+                    milestone_id,
+                    task_id,
+                    attempt,
+                    {
+                        "phase": "repair_preflight",
+                        "plan_id": plan_id,
+                        "early_exit": "no_op_repair",
+                        "classification": fc.to_dict(),
+                    },
+                )
+                msg = (
+                    f"Repair loop stopped: planner produced an identical plan to attempt "
+                    f"{attempt - 1} (plan hash unchanged). Human review required."
+                )
+                _maybe_finalize(msg)
+                return {
+                    "ok": False,
+                    "apply_ok": False,
+                    "gates_ok": False,
+                    "plan_id": plan_id,
+                    "message": msg,
+                    "repair_attempts_used": attempt - 1,
+                    "gate_results": last_gate_results,
+                    "failure_classification": fc.to_dict(),
+                    "repair_stopped_reason": "no_op_repair",
+                    "policy": {
+                        "run_validation_gate": run_milestone_validation,
+                        "test_command": apply_policy.test_command,
+                        "test_timeout_seconds": apply_policy.test_timeout_seconds,
+                        "test_output_max_chars": apply_policy.test_output_max_chars,
+                    },
+                    "orchestration": "task_repair_loop",
+                }
+
             apply_res = Executor.apply_reviewed_plan_with_gates(
                 plan_id,
                 run_validation_gate=False,
@@ -505,6 +579,15 @@ class Executor:
 
             if not apply_res.get("apply_ok"):
                 last_message = apply_res.get("message") or "Apply failed."
+                fc = classify_repair_failure(
+                    phase="apply",
+                    apply_errors=list(apply_res.get("errors") or []),
+                    attempt=attempt,
+                    previous_plan_hash=prev_plan_hash,
+                    current_plan_hash=curr_plan_hash,
+                    planner_metadata=planner_meta,
+                )
+                last_failure_classification = fc.to_dict()
                 persist_task_feedback(
                     milestone_id,
                     task_id,
@@ -514,6 +597,7 @@ class Executor:
                         "plan_id": plan_id,
                         "apply_ok": False,
                         "errors": apply_res.get("errors", []),
+                        "classification": fc.to_dict(),
                     },
                 )
                 repair_context = build_repair_context(
@@ -523,7 +607,11 @@ class Executor:
                     apply_ok=False,
                     apply_errors=list(apply_res.get("errors") or []),
                     gate_results=None,
+                    classification=fc.to_dict(),
+                    repair_mode=fc.mode,
                 )
+                last_failure_phase = "apply"
+                prev_plan_hash = curr_plan_hash
                 continue
 
             if task_exec_policy.artifact_test_generation:
@@ -567,6 +655,15 @@ class Executor:
                     or summarize_gate_results(gates)
                     or "Validation or tests failed."
                 )
+                fc = classify_repair_failure(
+                    phase="gates",
+                    gate_results=gates,
+                    attempt=attempt,
+                    previous_plan_hash=prev_plan_hash,
+                    current_plan_hash=curr_plan_hash,
+                    planner_metadata=planner_meta,
+                )
+                last_failure_classification = fc.to_dict()
                 persist_task_feedback(
                     milestone_id,
                     task_id,
@@ -581,6 +678,7 @@ class Executor:
                             "message": gen.message,
                         },
                         "gate_results": gates,
+                        "classification": fc.to_dict(),
                     },
                 )
                 repair_context = build_repair_context(
@@ -594,7 +692,11 @@ class Executor:
                     extra_message=None
                     if gen.generated
                     else gen.message,
+                    classification=fc.to_dict(),
+                    repair_mode=fc.mode,
                 )
+                last_failure_phase = "gates"
+                prev_plan_hash = curr_plan_hash
                 continue
 
             payload = load_reviewed_plan(plan_id)
@@ -673,6 +775,7 @@ class Executor:
             "gate_summary": summarize_gate_results(last_gate_results)
             if last_gate_results
             else "",
+            "failure_classification": last_failure_classification,
             "policy": {
                 "run_validation_gate": run_milestone_validation,
                 "test_command": apply_policy.test_command,
