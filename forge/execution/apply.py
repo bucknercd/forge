@@ -38,6 +38,10 @@ from forge.execution.section_ops import (
     replace_section_body,
 )
 from forge.execution.text_diff import unified_diff_bounded
+from forge.execution.write_file_integrity import (
+    log_write_file_payload_stage,
+    verify_write_file_disk_matches,
+)
 from forge.models import Decision
 from forge.run_events import ACTION_APPLIED, as_emitter
 
@@ -351,10 +355,16 @@ class ArtifactActionApplier:
                 path.parent.mkdir(parents=True, exist_ok=True)
             before = path.read_text(encoding="utf-8") if path.exists() else ""
             after = action.body
+            log_write_file_payload_stage(
+                action.rel_path, after, "before_write", line_no=None
+            )
             changed = before != after
             if changed:
                 if not dry_run:
                     path.write_text(after, encoding="utf-8")
+                    verify_write_file_disk_matches(
+                        path, after, rel_path=action.rel_path
+                    )
                 result.files_changed.append(path)
             self._append_file_record(
                 result,

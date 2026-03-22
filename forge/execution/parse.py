@@ -6,6 +6,7 @@ import re
 
 from forge.design_manager import Milestone
 from forge.execution.file_edits import unescape_action_body
+from forge.execution.write_file_integrity import log_write_file_payload_stage
 from forge.execution.models import (
     ActionAppendSection,
     ActionReplaceSection,
@@ -94,6 +95,9 @@ def parse_forge_action_line(
                 _fmt_diag("forge action", f"write_file empty path: {raw!r}", line_no)
             )
         body_resolved = unescape_action_body(body)
+        log_write_file_payload_stage(
+            rel_path, body_resolved, "after_parse_unescape", line_no=line_no
+        )
         return ActionWriteFile(rel_path=rel_path, body=body_resolved)
 
     if first in BOUNDED_FILE_EDIT_CMDS:

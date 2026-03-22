@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Union
 
+from forge.execution.write_file_integrity import log_write_file_payload_stage
+
 
 @dataclass(frozen=True)
 class ActionAppendSection:
@@ -273,9 +275,18 @@ class ExecutionPlan:
             elif t == "mark_milestone_completed":
                 actions.append(ActionMarkMilestoneCompleted())
             elif t == "write_file":
-                actions.append(
-                    ActionWriteFile(rel_path=item["rel_path"], body=item["body"])
-                )
+                rp = item.get("rel_path")
+                bd = item.get("body")
+                if not isinstance(rp, str):
+                    raise ValueError(
+                        f"write_file action rel_path must be a string, got {type(rp).__name__}"
+                    )
+                if not isinstance(bd, str):
+                    raise ValueError(
+                        f"write_file action body must be a string, got {type(bd).__name__}"
+                    )
+                log_write_file_payload_stage(rp, bd, "from_reviewed_plan_json")
+                actions.append(ActionWriteFile(rel_path=rp, body=bd))
             elif t == "insert_after_in_file":
                 actions.append(
                     ActionInsertAfterInFile(
