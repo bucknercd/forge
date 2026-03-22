@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from forge.design_manager import Milestone
+
 from forge.execution.models import ExecutionPlan
 from forge.execution.parse import parse_forge_action_line
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.llm import LLMClient
 from forge.paths import Paths
+from forge.planner_normalize import (
+    normalize_llm_planner_action_line,
+    persist_llm_planner_raw_on_failure,
+)
 
 
 class Planner:
@@ -46,42 +51,58 @@ class LLMPlanner(Planner):
     mode: str = "llm"
     stable_for_recheck: bool = False
     fallback_to_milestone_actions: bool = True
+    last_normalization_notes: list[str] = field(default_factory=list)
 
     def build_plan(
         self, milestone: Milestone, *, repair_context: dict | None = None
     ) -> ExecutionPlan:
+        self.last_normalization_notes = []
         prompt = _build_llm_plan_prompt(milestone)
         if repair_context:
             from forge.task_feedback import repair_context_to_prompt_appendix
 
             prompt += repair_context_to_prompt_appendix(repair_context)
-        raw = self.llm_client.generate(prompt)
-        actions_raw = _parse_llm_actions(
-            raw,
-            fallback_actions=milestone.forge_actions if self.fallback_to_milestone_actions else None,
-        )
-        if not actions_raw:
-            raise ValueError("LLM planner output produced an empty actions list.")
+        raw = ""
+        try:
+            raw = self.llm_client.generate(prompt)
+            actions_raw = _parse_llm_actions(
+                raw,
+                fallback_actions=milestone.forge_actions if self.fallback_to_milestone_actions else None,
+            )
+            if not actions_raw:
+                raise ValueError("LLM planner output produced an empty actions list.")
 
-        actions = []
-        for idx, item in enumerate(actions_raw, start=1):
-            if not isinstance(item, str):
-                raise ValueError(f"LLM planner action {idx} must be a string.")
-            if not item.strip():
-                raise ValueError(f"LLM planner action {idx} must be non-empty.")
-            try:
-                actions.append(parse_forge_action_line(item, milestone))
-            except ValueError as exc:
-                raise ValueError(f"LLM planner action {idx} invalid: {exc}") from exc
-        return ExecutionPlan(milestone_id=milestone.id, actions=actions)
+            actions = []
+            for idx, item in enumerate(actions_raw, start=1):
+                if not isinstance(item, str):
+                    raise ValueError(f"LLM planner action {idx} must be a string.")
+                if not item.strip():
+                    raise ValueError(f"LLM planner action {idx} must be non-empty.")
+                try:
+                    normalized, notes = normalize_llm_planner_action_line(item)
+                    for n in notes:
+                        self.last_normalization_notes.append(f"action {idx}: {n}")
+                    actions.append(parse_forge_action_line(normalized, milestone))
+                except ValueError as exc:
+                    raise ValueError(f"LLM planner action {idx} invalid: {exc}") from exc
+            return ExecutionPlan(milestone_id=milestone.id, actions=actions)
+        except ValueError as exc:
+            if raw and str(raw).strip():
+                persist_llm_planner_raw_on_failure(
+                    raw, milestone.id, reason=str(exc)
+                )
+            raise
 
     def metadata(self) -> dict:
-        return {
+        meta = {
             "mode": self.mode,
             "is_nondeterministic": True,
             "llm_client": getattr(self.llm_client, "client_id", "unknown"),
             "llm_model": getattr(self.llm_client, "model_name", None),
         }
+        if self.last_normalization_notes:
+            meta["normalization_notes"] = self.last_normalization_notes
+        return meta
 
 
 def _doc_excerpt(path, *, max_chars: int = 1200) -> str:
@@ -110,6 +131,11 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
         "- Use only these action verbs:\n"
         "  append_section <target> <Section Heading> | <body>\n"
         "  replace_section <target> <Section Heading> | <body>\n"
+        "- CRITICAL for append_section / replace_section: there must be THREE space-separated "
+        "tokens BEFORE the first ' | ' (verb, target, section heading). "
+        "Do NOT write 'append_section requirements | ...' — that is invalid. "
+        "The <Section Heading> is a short title (e.g. Overview), not the whole section body.\n"
+        "- Prefer write_file / bounded file edits for code; use append_section only for doc sections.\n"
         "  write_file <rel_path> | <body with \\\\n for newlines>\n"
         "  insert_after_in_file <rel_path> | anchor @@FORGE@@ insertion\n"
         "  insert_before_in_file <rel_path> | anchor @@FORGE@@ insertion\n"

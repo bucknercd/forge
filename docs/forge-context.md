@@ -232,41 +232,48 @@ Structured run events ship for **`forge vertical-slice`** (and the same bus/hook
 Event types include: `run_started`, `phase_started`, `phase_completed`, `artifact_written`, `plan_saved`, `action_applied`, `validation_started`, `validation_completed`, `run_completed`, `run_failed`.
 
 #### Bounded file edits (first slice)
-Forge Actions can perform **minimal bounded edits** on allowed repo paths (`examples/`, `src/`, `scripts/`, `tests/`) using deterministic substring rules:
+Forge supports **minimal bounded edit actions** on allowed repo paths (`examples/`, `src/`, `scripts/`, `tests/`) using deterministic text-matching rules:
 
-- `insert_after_in_file`, `insert_before_in_file`, `replace_text_in_file`, `replace_block_in_file` (see README)
+- `insert_after_in_file`, `insert_before_in_file`, `replace_text_in_file`, `replace_block_in_file`
 - Separators: literal ` @@FORGE@@ ` between payload parts; `\\n` escapes in payloads
-- **Zero or multiple** non-overlapping matches → safe failure (no partial writes)
-- **`write_file`** remains for bootstrapping / full-file cases
+- Default matching rule: **exactly one non-overlapping match required**, otherwise fail safely with no partial write
+- `write_file` remains supported for bootstrapping and full-file replacement cases
 
 #### Bounded edits — phase 1 extensions
 Practical, code-oriented bounded editing (still stdlib-only, no AST):
 
-- **Matching**: optional `occurrence=N`, `must_be_unique=false`, `line_match=true` (full-line equality); default remains unique-or-fail
-- **Lines**: `replace_lines_in_file` with inclusive 1-based `start_line`/`end_line`; invalid ranges fail safely
-- **Newlines**: normalized to `\n` for matching and writes from bounded edits
-- **Diffs**: unified diff with context lines + `# forge-action:` header tying output to the action
+- **Matching**: optional `occurrence=N`; default remains unique-or-fail
+- **Line matching**: optional `line_match=true` for full-line equality matching
+- **Lines**: `replace_lines_in_file` with inclusive 1-based `start_line` / `end_line`; invalid ranges fail safely
+- **Newlines**: bounded-edit matching and writes normalize to `\n`
+- **Diffs**: emit a unified diff with context lines and a `# forge-action:` header tied to the action
+- **Safety**: zero matches, ambiguous matches, invalid ranges, or malformed payloads fail safely with no partial write
 
 ### Active TODO
 
-1. Policy and orchestration polish
+1. Policy, normalization, and orchestration polish
+   - add safe normalization/canonicalization at LLM boundaries before execution
    - optional limits (per-run file touches, path classes) and stricter review defaults where needed
    - reuse run-event + JSONL patterns on `task-apply-plan` / workflow paths
-   - further reduce reliance on `write_file` for incremental milestones
+   - further reduce reliance on fragile freeform actions in incremental milestones
+   - ensure executor only consumes canonical validated actions
 
 ### Next TODOs (Stabilization Phase)
 
 2. Add end-to-end regression coverage
-   - test full workflows with mocked LLM responses
-   - ensure deterministic replay of milestone → plan → apply
-   - validate failure modes are safe
+   - test full workflows with mocked and sloppy LLM responses
+   - ensure deterministic replay of normalized milestone → plan → apply
+   - validate recoverable vs non-recoverable failure modes
+   - ensure raw planner/milestone artifacts are persisted on failure
 
 3. Improve LLM output quality
    - refine weak-text detection
    - improve redundancy detection
+   - tighten prompts around supported action grammar
    - optionally add scoring/ranking of plans and milestones
 
 4. Strengthen validation gates
    - expand test/lint/command validation
    - improve failure feedback loop
    - ensure bad outputs cannot silently pass
+   - detect and surface no-op repair loops clearly
