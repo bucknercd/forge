@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,106 @@ from forge.policy_config import load_planner_policy
 MIN_MULTI_TASKS = 2
 MAX_TASKS = 6
 _TASK_FILE_VERSION = 1
+
+# Task status persisted in ``.system/tasks/m<id>.json``
+TASK_STATUS_NOT_STARTED = "not_started"
+TASK_STATUS_COMPLETED = "completed"
+
+
+def task_is_completed(task: Task) -> bool:
+    return (task.status or "").strip().lower() == TASK_STATUS_COMPLETED
+
+
+def get_next_task(milestone_id: int) -> Task | None:
+    """
+    First task (by id) that is not completed and whose ``depends_on`` are all completed.
+
+    Returns ``None`` when there are no tasks or every task is completed.
+    """
+    tasks = sorted(list_tasks(milestone_id), key=lambda t: t.id)
+    if not tasks:
+        return None
+    done_ids = {t.id for t in tasks if task_is_completed(t)}
+    for t in tasks:
+        if task_is_completed(t):
+            continue
+        if not all(d in done_ids for d in t.depends_on):
+            continue
+        return t
+    return None
+
+
+def set_task_status(milestone_id: int, task_id: int, status: str) -> None:
+    """Update one task's ``status`` and rewrite the tasks file."""
+    tasks = list_tasks(milestone_id)
+    updated: list[Task] = []
+    found = False
+    for t in tasks:
+        if t.id == task_id:
+            updated.append(
+                Task(
+                    id=t.id,
+                    milestone_id=t.milestone_id,
+                    title=t.title,
+                    objective=t.objective,
+                    summary=t.summary,
+                    depends_on=list(t.depends_on),
+                    files_allowed=t.files_allowed,
+                    validation=t.validation,
+                    done_when=t.done_when,
+                    status=status,
+                    forge_actions=list(t.forge_actions),
+                    forge_validation=list(t.forge_validation),
+                )
+            )
+            found = True
+        else:
+            updated.append(t)
+    if not found:
+        return
+    save_tasks(milestone_id, updated)
+
+
+def all_tasks_completed(milestone_id: int) -> bool:
+    tasks = list_tasks(milestone_id)
+    return bool(tasks) and all(task_is_completed(t) for t in tasks)
+
+
+def ensure_tasks_for_milestone(
+    milestone_id: int,
+    *,
+    force: bool = False,
+    log: Any | None = None,
+) -> dict[str, Any]:
+    """
+    Ensure ``.system/tasks/m<id>.json`` exists with at least one task.
+
+    If the file is missing or empty, runs the same expansion as ``task-expand``
+    and optionally logs the standard auto-expand notice via ``log`` (default ``print``).
+    """
+    log_fn = log if log is not None else (lambda m: print(m, file=sys.stderr))
+    path = tasks_file_for_milestone(milestone_id)
+    existing = list_tasks(milestone_id) if path.exists() else []
+    if existing and not force:
+        return {
+            "ok": True,
+            "auto_expanded": False,
+            "task_count": len(existing),
+            "message": "",
+        }
+
+    log_fn(f"Tasks not found for milestone {milestone_id}. Auto-expanding tasks...")
+    r = expand_milestone_to_tasks(milestone_id=milestone_id, force=force)
+    if not r.get("ok"):
+        return {**r, "auto_expanded": True}
+    if r.get("expansion_mode") == "compatibility" and not r.get("skipped"):
+        log_fn(
+            "Task expansion used compatibility mode. Falling back to a single task mirroring the milestone."
+        )
+    return {
+        **r,
+        "auto_expanded": not bool(r.get("skipped")),
+    }
 
 
 def tasks_dir() -> Path:

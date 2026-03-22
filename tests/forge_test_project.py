@@ -15,6 +15,15 @@ def forge_block(marker: str) -> str:
 """
 
 
+def compat_forge_block(marker: str) -> str:
+    """Like ``forge_block`` but without ``mark_milestone_completed`` → single compat task when expanded."""
+    return f"""- **Forge Actions**:
+  - append_section requirements Overview | {marker}
+- **Forge Validation**:
+  - file_contains requirements {marker}
+"""
+
+
 def configure_project(tmp_path, milestones_body: str) -> None:
     Paths.refresh(tmp_path)
     Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)

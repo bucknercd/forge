@@ -4,7 +4,7 @@ from forge.cli import ForgeCLI
 from forge.executor import Executor
 from forge.paths import Paths
 
-from tests.forge_test_project import configure_project, forge_block
+from tests.forge_test_project import compat_forge_block, configure_project
 
 
 def _two_milestones_body():
@@ -15,13 +15,13 @@ def _two_milestones_body():
 - **Objective**: A objective
 - **Scope**: A scope
 - **Validation**: A validation
-{forge_block("FORGE_M1")}
+{compat_forge_block("FORGE_M1")}
 
 ## Milestone 2: B
 - **Objective**: B objective
 - **Scope**: B scope
 - **Validation**: B validation
-{forge_block("FORGE_M2")}
+{compat_forge_block("FORGE_M2")}
 """
 
 
@@ -34,7 +34,7 @@ def _write_dependency_milestones(path, prereq_incomplete=False):
     else:
         prereq_scope = "Prereq scope"
         prereq_val = "Prereq validation"
-    prereq_forge = "" if prereq_incomplete else forge_block("FORGE_PREREQ")
+    prereq_forge = "" if prereq_incomplete else compat_forge_block("FORGE_PREREQ")
 
     path.write_text(
         f"""
@@ -51,7 +51,7 @@ def _write_dependency_milestones(path, prereq_incomplete=False):
 - **Objective**: Dependent objective
 - **Scope**: Dependent scope
 - **Validation**: Dependent validation
-{forge_block("FORGE_DEP")}
+{compat_forge_block("FORGE_DEP")}
 """
     )
 
@@ -113,7 +113,8 @@ def test_execute_next_returns_complete_when_all_done(tmp_path):
     assert result["outcome"] == "complete"
 
 
-def test_execute_next_returns_in_progress_when_active_and_nothing_else(tmp_path):
+def test_execute_next_resumes_in_progress_milestone(tmp_path):
+    """With only in_progress milestones, the selector still picks one and runs the next task."""
     configure_project(tmp_path, _two_milestones_body())
     ForgeCLI.milestone_sync_state()
 
@@ -129,7 +130,8 @@ def test_execute_next_returns_in_progress_when_active_and_nothing_else(tmp_path)
     )
 
     result = Executor.execute_next()
-    assert result["outcome"] == "in_progress"
+    assert result["outcome"] in {"executed", "complete"}
+    assert result.get("milestone_id") == 1
 
 
 def test_execute_next_returns_blocked_when_prereq_failed(tmp_path):
@@ -240,6 +242,10 @@ def test_execute_next_resume_after_prereq_recovery(tmp_path):
 
     # Recover prerequisite by updating milestone 1 fields (add forge actions).
     _write_dependency_milestones(Paths.MILESTONES_FILE, prereq_incomplete=False)
+    # Drop stale task JSON so expansion matches the updated milestone.
+    stale = Paths.SYSTEM_DIR / "tasks" / "m1.json"
+    if stale.exists():
+        stale.unlink()
 
     second = Executor.execute_next()
     assert second["milestone_id"] == 1

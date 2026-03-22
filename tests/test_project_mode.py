@@ -16,7 +16,6 @@ def _write_minimal_milestones(path: Path):
 - **Validation**: Validate first
 - **Forge Actions**:
   - append_section requirements Overview | FORGE_CLI_OK
-  - mark_milestone_completed
 - **Forge Validation**:
   - file_contains requirements FORGE_CLI_OK
 """
@@ -150,7 +149,7 @@ def test_cli_commands_operate_after_init(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["forge", "execute-next"])
     main()
     exec_out = capsys.readouterr().out
-    assert "Milestone 1 completed." in exec_out
+    assert "Milestone 1 completed" in exec_out
 
     state_file = tmp_path / ".system" / "milestone_state.json"
     state = json.loads(state_file.read_text())

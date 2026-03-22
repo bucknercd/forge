@@ -46,11 +46,26 @@ from forge.run_event_handlers import (
 )
 from forge.run_events import RunEventBus
 from forge.task_service import (
+    ensure_tasks_for_milestone,
     expand_milestone_to_tasks,
+    get_next_task,
     get_task,
     list_tasks,
     task_count_for_milestone,
 )
+
+
+def _task_list_for_milestone_cli(milestone_id: int) -> list[dict]:
+    return [
+        {
+            "id": t.id,
+            "title": t.title,
+            "objective": t.objective[:200],
+            "depends_on": list(t.depends_on),
+            "status": t.status,
+        }
+        for t in list_tasks(milestone_id)
+    ]
 from forge.vertical_slice import (
     read_vision_file_text,
     resolve_vision_file_path,
@@ -538,10 +553,13 @@ class ForgeCLI:
         result = Executor.execute_next()
         outcome = result.get("outcome")
         milestone_id = result.get("milestone_id")
+        task_id = result.get("task_id")
         print(result.get("message", ""))
         if milestone_id is not None and outcome in {"executed", "complete"}:
             # Provide a tiny bit of context without leaking orchestration internals.
             print(f"Milestone ID: {milestone_id}")
+            if task_id is not None:
+                print(f"Task ID: {task_id}")
 
     @staticmethod
     def milestone_preview(
@@ -608,9 +626,16 @@ class ForgeCLI:
                         "ok": False,
                         "message": "Save-plan without milestone ID requires deterministic planner.",
                     }
-                if result.get("ok") and result.get("milestone_id") is not None:
-                    result = Executor.save_reviewed_plan_for_milestone(
-                        result["milestone_id"], planner=planner, review_enforcement=enforcement
+                if (
+                    result.get("ok")
+                    and result.get("milestone_id") is not None
+                    and result.get("task_id") is not None
+                ):
+                    result = Executor.save_reviewed_plan_for_task(
+                        int(result["milestone_id"]),
+                        int(result["task_id"]),
+                        planner=planner,
+                        review_enforcement=enforcement,
                     )
         elif save_plan:
             assert milestone_id is not None
@@ -622,9 +647,14 @@ class ForgeCLI:
                     review_enforcement=enforcement,
                 )
             else:
-                result = Executor.save_reviewed_plan_for_milestone(
-                    milestone_id, planner=planner, review_enforcement=enforcement
-                )
+                result = {
+                    "ok": False,
+                    "message": (
+                        "--save-plan with an explicit milestone id requires --task <n>. "
+                        "Run `forge task-list --milestone <id>` to list tasks."
+                    ),
+                    "errors": ["--task required for save-plan"],
+                }
         else:
             if milestone_id is None:
                 if task_id is not None:
@@ -641,29 +671,62 @@ class ForgeCLI:
                         "message": "Previewing next milestone with non-deterministic planner requires explicit milestone ID.",
                     }
             elif task_id is not None:
-                result = Executor.preview_milestone(
-                    milestone_id, planner=planner, task_id=task_id
-                )
+                ens = ensure_tasks_for_milestone(milestone_id)
+                if not ens.get("ok"):
+                    result = {"ok": False, "message": ens.get("message", "")}
+                else:
+                    result = Executor.preview_milestone(
+                        milestone_id, planner=planner, task_id=task_id
+                    )
             else:
-                result = Executor.preview_milestone(milestone_id, planner=planner)
+                ens = ensure_tasks_for_milestone(milestone_id)
+                if not ens.get("ok"):
+                    result = {"ok": False, "message": ens.get("message", "")}
+                else:
+                    result = {
+                        "ok": False,
+                        "requires_task_selection": True,
+                        "milestone_id": milestone_id,
+                        "message": (
+                            f"Execution is task-scoped. Choose a task for milestone {milestone_id} "
+                            "with --task <n>."
+                        ),
+                        "tasks": _task_list_for_milestone_cli(milestone_id),
+                        "errors": ["task selection required"],
+                    }
         result["review_enforcement"] = enforcement
         if json_mode:
             print(json.dumps(serialize_preview_result(result), indent=2, sort_keys=True))
+            return
+
+        if result.get("requires_task_selection"):
+            mid_sel = result.get("milestone_id")
+            print(result.get("message", "Choose a task."))
+            if mid_sel is not None:
+                print(f"Tasks for milestone {mid_sel}:")
+                for t in list_tasks(int(mid_sel)):
+                    deps_s = ", ".join(str(d) for d in t.depends_on) if t.depends_on else "—"
+                    obj = (t.objective or "").replace("\n", " ")
+                    if len(obj) > 90:
+                        obj = obj[:87] + "…"
+                    print(f"  [{t.id}] {t.title}")
+                    print(f"      objective: {obj or '—'}")
+                    print(f"      depends_on: {deps_s}")
+            print(
+                f"Run: forge milestone-preview {mid_sel} --task <n> [--save-plan]"
+                if mid_sel is not None
+                else "Run: forge milestone-preview <id> --task <n>"
+            )
             return
 
         if not result.get("ok"):
             print(result.get("message", "Preview unavailable."))
             return
 
-        if result.get("task_id") is not None:
-            print(
-                f"Preview Task: milestone {result['milestone_id']} task {result['task_id']}. "
-                f"{result.get('title', '')}"
-            )
-        else:
-            print(
-                f"Preview Milestone: {result['milestone_id']}. {result.get('title', '')}"
-            )
+        print(
+            f"Preview Task: milestone {result['milestone_id']} task {result['task_id']}. "
+            f"{result.get('title', '')}"
+        )
         pmeta = result.get("planner_metadata", {}) or {}
         planner_line = f"Planner: {result.get('planner_mode', 'deterministic')}"
         if pmeta.get("llm_client"):
@@ -977,8 +1040,31 @@ class ForgeCLI:
                 )
             assert planner is not None
             enforcement = _review_enforcement_status(planner, planner_policy, save_plan=True)
-            preview = Executor.save_reviewed_plan_for_milestone(
-                milestone_id, planner=planner, review_enforcement=enforcement
+            expand = ensure_tasks_for_milestone(milestone_id)
+            if not expand.get("ok"):
+                stages.append(
+                    {"stage": "task_expand", "ok": False, "message": expand.get("message", "")}
+                )
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                )
+            nt = get_next_task(milestone_id)
+            if nt is None:
+                stages.append(
+                    {
+                        "stage": "preview_save_plan",
+                        "ok": False,
+                        "message": f"No pending tasks for milestone {milestone_id}.",
+                    }
+                )
+                return ForgeCLI._print_workflow_result(
+                    stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                )
+            preview = Executor.save_reviewed_plan_for_task(
+                milestone_id,
+                nt.id,
+                planner=planner,
+                review_enforcement=enforcement,
             )
             stages.append({"stage": "preview_save_plan", **preview})
             if not preview.get("ok"):

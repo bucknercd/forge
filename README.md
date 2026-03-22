@@ -2,9 +2,16 @@
 
 Forge is a **spec-driven CLI** that turns **ideas into milestones into code**—**the coherent, validated code that working systems are built from**.
 
-You start with intent—a short phrase on the command line, a long vision in a file, or the built-in demo. Forge (optionally with an LLM) turns that into **`docs/` specs** and **`docs/milestones.md`**: structured milestones whose **Forge Actions** describe concrete file edits and whose **Forge Validation** rules define how to check the result. A **planner** turns the next milestone into an **execution plan**; Forge **applies** it under **gates** (validation rules + optional test command). The loop repeats until the pieces **fit together as a system** you can trust—not just files on disk, but **behavior that holds up under checks**.
+Forge is a **two-layer system**:
 
-**In one sentence:** *idea → vision & specs → milestones → plan → applied code → validation → a working system.*
+1. **Milestones (roadmap)** — live in **`docs/milestones.md`**: intent, scope, **Forge Actions**, and **Forge Validation** for the whole slice. They define *what* to achieve, not the step you execute next in the engine.
+2. **Tasks (execution units)** — live in **`.system/tasks/m<id>.json`**: small, ordered, reviewable steps derived from a milestone. **Only tasks are executed:** preview, reviewed plans, and apply always go through a **task id** (`m<id>-t<task>-<hash>` plans).
+
+Between those layers, **task expansion** turns milestone Forge Actions into 2–6 tasks (deterministic split) or a **single compatibility task** when splitting is not possible. Expansion runs **automatically** the first time you preview, save a plan, run **`execute-next`**, **`vertical-slice`**, or **`workflow-guarded`** (you’ll see a notice on **stderr** if tasks were missing). You can still run **`forge task-expand`** manually or with **`--force`** to refresh JSON from the current milestone text.
+
+You start with intent—a short phrase, a vision file, or the demo. Forge (optionally with an LLM) materializes **`docs/`** specs and milestones. A **planner** builds a plan for the **selected task**; Forge **applies** it under **gates**. The loop repeats until the system **holds up under checks**.
+
+**In one sentence:** *idea → vision & specs → milestones → **tasks** → reviewed plan → apply → validation → a working system.*
 
 ---
 
@@ -17,10 +24,16 @@ Your idea (CLI text, vision file, or demo)
 docs/   vision.txt · requirements.md · architecture.md · milestones.md
         │
         ▼
-Milestones   (markdown: objectives + Forge Actions + Forge Validation)
+Milestones   (roadmap: objectives + Forge Actions + Forge Validation)
         │
         ▼
-Plan         (reviewed, saved under .system/reviewed_plans/)
+Task expansion (automatic or `forge task-expand`) → .system/tasks/m<id>.json
+        │
+        ▼
+Task selection (--task <n>, or next pending task for execute-next / vertical-slice)
+        │
+        ▼
+Plan         (reviewed, saved under .system/reviewed_plans/, id m<id>-t<task>-<hash>)
         │
         ▼
 Apply        (write_file, bounded edits, append_section, …)
@@ -32,9 +45,7 @@ Gates        (Forge Validation + optional repo test command)
 Working system — code + updated specs, validated
 ```
 
-**Optional task mode (finer slices):** `forge task-expand` turns each roadmap milestone into **2–6 ordered tasks** in **`.system/tasks/m<id>.json`** (or **one compatibility task** if expansion can’t split safely). You then run **`milestone-preview` / `--save-plan` with `--task <n>`** so each **saved plan** and **apply** targets that task’s Forge Actions/Validation while still using the same milestone id in `docs/milestones.md`. See **[Milestones vs tasks](#milestones-vs-tasks-two-layer-planning)**.
-
-**`forge vertical-slice`** runs the full slice in one go: materialize or refresh docs from the idea → preview/save plan for milestone 1 → apply → gates (milestone-wide, not task JSON). **`forge milestone-*`** commands let you walk the same path step by step on an existing repo; add **`task-expand` + `--task`** when you want execution broken into reviewable steps.
+**`forge vertical-slice`** materializes docs, **ensures tasks** for milestone **1**, saves a reviewed plan for the **next pending task**, applies it, and runs gates. **`forge milestone-preview`** without **`--task`** lists tasks and asks you to pick one; with **`--task`** it previews that execution unit. **`forge execute-next`** runs the **next milestone’s next pending task** (multi-task milestones may need several **`execute-next`** runs). See **[Milestones vs tasks](#milestones-vs-tasks-two-layer-planning)** and **[Why tasks are required](#why-tasks-are-required)**.
 
 ---
 
@@ -53,9 +64,9 @@ forge vertical-slice --demo
 **What happens**
 
 1. Writes `docs/vision.txt`, `docs/requirements.md`, `docs/architecture.md`, and `docs/milestones.md` with a tiny **CLI todo** example.
-2. Builds an execution plan from milestone **Forge Actions** (deterministic by default), including `write_file examples/todo_cli.py | …`.
-3. Saves a reviewed plan under `.system/reviewed_plans/`.
-4. Applies the plan (creates `examples/todo_cli.py`, appends to requirements, updates milestone status in `docs/milestones.md`).
+2. **Expands tasks** for milestone 1 (if needed), then builds an execution plan for the **next pending task** from `.system/tasks/m1.json` (deterministic planner by default), including `write_file examples/todo_cli.py | …` when that task’s actions say so.
+3. Saves a **task-scoped** reviewed plan under `.system/reviewed_plans/` (plan id **`m1-t<task>-<hash>`**).
+4. Applies the plan (creates `examples/todo_cli.py`, appends to requirements, updates milestone markers in `docs/milestones.md` when the task includes them).
 5. Runs **Forge Validation** (`path_file_contains`, `file_contains`) and the repo test gate **`python examples/todo_cli.py`** (demo default).
 
 **Progress output** is driven by a small **event bus** (not ad hoc `print` / logging): you’ll see phases (materialize, plan, apply, validation), each applied action (especially file paths), and gate results. It ends with **`Overall: success`** or **`Overall: failure`**.
@@ -193,23 +204,31 @@ Optional trailing segment: ` | occurrence=2 must_be_unique=false line_match=true
 - **Forge Actions** — declarative edits (`write_file`, `append_section`, bounded patches, …) that the executor applies in order.
 - **Forge Validation** — checks (`path_file_contains`, `file_contains`, …) that must pass after apply.
 
-The **planner** (deterministic or LLM-backed, per `forge-policy.json`) reads a **milestone-shaped execution unit** and produces a concrete **plan**. That unit is normally the milestone parsed from `docs/milestones.md`; if you use **task mode**, it is the **task** from `.system/tasks/m<id>.json` (still the same milestone **id** for `mark_milestone_completed` and docs). Important plans are **reviewed and saved** before apply so execution is traceable; plan ids include **`m<id>-t<task>-<hash>`** when scoped to a task.
+The **planner** (deterministic or LLM-backed, per `forge-policy.json`) always reads a **milestone-shaped execution unit** produced from a **task** under `.system/tasks/m<id>.json` via `task_to_execution_milestone(...)` (same roadmap **milestone id** for `mark_milestone_completed` and docs). **New** reviewed plans are always **task-scoped** (`m<id>-t<task>-<hash>`). **Legacy** reviewed plans saved before task enforcement may omit `task_id`; **`milestone-apply-plan`** can still apply them using the milestone definition from `docs/milestones.md` until you re-save from a task.
 
 **Execution** is deterministic: Forge does what the saved plan says, then runs **gates**. Failure stops the run with a clear reason; you fix specs, milestones, or code and try again—there is no hidden auto-retry in the engine itself (orchestration like `workflow-guarded` can combine multiple steps).
 
 ### Milestones vs tasks (two-layer planning)
 
-**Milestones** live in `docs/milestones.md`: roadmap intent, Forge Actions, and Forge Validation for the whole slice. **Tasks** are the **execution unit** for planning and apply when you use task mode: concrete, ordered steps stored as JSON under **`.system/tasks/m<milestone_id>.json`** (easy to diff and edit). Preview/save/apply use the selected task’s actions/validation while still targeting the same milestone id (e.g. `mark_milestone_completed`).
+**Milestones** live in `docs/milestones.md`: roadmap intent, Forge Actions, and Forge Validation for the whole slice. They are **not** passed directly to the planner/executor.
 
-- **`forge task-expand --milestone <id>`** — generates **2–6 tasks** when possible using a **deterministic split** of Forge Actions (work slices first, `mark_milestone_completed` + milestone Forge Validation on the **last** task; or multiple work-only tasks when there is no completion marker). If a real OpenAI client is configured in policy, Forge may try an **optional LLM JSON expansion** that must pass the same checks; otherwise it stays deterministic. If expansion cannot produce a valid multi-task list, Forge falls back to a **single compatibility task** that mirrors the milestone (same behavior as early task mode).
-- **`forge task-list --milestone <id>`** — human-readable lines: task **id**, **title**, short **objective**, **depends_on**. **`forge task-show --milestone <id> --task <n>`** — full detail (both support **`--json`**).
-- **`--force`** on **`task-expand`** replaces an existing `.system/tasks/m<id>.json` from the **current** milestone text (default is to keep existing tasks).
-- **`forge milestone-preview <id> --task <n>`** — preview a plan built from that task (same planner rules as milestone preview).
-- **`forge milestone-preview <id> --task <n> --save-plan`** — save a reviewed plan; plan ids look like **`m<id>-t<task>-<hash>`**. Apply with **`forge milestone-apply-plan <plan_id>`** (unchanged command; no bypass of review or gates).
+**Tasks** are the **only** execution units: concrete, ordered steps in **`.system/tasks/m<milestone_id>.json`**. Preview, **`--save-plan`**, **`execute-next`**, **`vertical-slice`**, and **`workflow-guarded`** all resolve a **task id** (explicit **`--task`**, or the **next pending task** for automated flows). Roadmap **`mark_milestone_completed`** still refers to the **milestone id** in `docs/milestones.md`.
 
-**Compatibility:** If you never run `task-expand`, behavior stays **milestone-only** (`milestone-preview` / `milestone-apply-plan` as today). After `task-expand`, prefer **task-scoped** preview/save for execution-level review; milestone-level preview still reflects the full `docs/milestones.md` block.
+- **Auto-expansion** — If tasks are missing, Forge runs the same logic as **`forge task-expand --milestone <id>`** (notices on **stderr**). If a multi-task split is invalid, Forge uses a **single compatibility task** that mirrors the whole milestone and logs a **compatibility-mode** warning (never a silent raw-milestone execute).
+- **`forge task-expand --milestone <id>`** — (Re)materialize tasks: **2–6** via deterministic split when possible; optional **LLM JSON** expansion when a non-stub OpenAI client is configured; else **compatibility** fallback. Use **`--force`** to replace existing JSON from the current milestone text.
+- **`forge task-list` / `forge task-show`** — Inspect tasks (**`--json`** supported).
+- **`forge milestone-preview <id>`** — Without **`--task`**, Forge prints the task list and tells you to pass **`--task <n>`**. With **`--task`**, previews that task. **`--save-plan`** with an explicit milestone id **requires** **`--task`**.
+- **`forge milestone-preview` (no id)** — Previews the **next eligible milestone’s next pending task** (deterministic planner only for the no-id save path, as before).
+- **`forge milestone-apply-plan <plan_id>`** — Unchanged; apply uses the **`task_id`** stored in the reviewed plan when present.
 
-**Note:** Post-apply **milestone_validation** still reads **Forge Validation** from `docs/milestones.md` for that milestone id. Split tasks **duplicate** the milestone’s Forge Validation on each slice that has Forge Actions so previews and gates stay well-formed; full milestone checks may only pass after the **last** task (or use `--no-gate-validate` on intermediate applies if your policy allows).
+**Note:** Post-apply **milestone_validation** still consults **`docs/milestones.md`** for that milestone id. Split tasks often **duplicate** milestone Forge Validation on each slice that has Forge Actions; full milestone gates may only pass after the **last** task (or use **`--no-gate-validate`** on intermediate applies if your policy allows).
+
+### Why tasks are required
+
+- **Scope control** — A whole milestone is usually too large for one review/apply; tasks force a bounded slice of Forge Actions.
+- **Determinism & traceability** — Reviewed plan ids include **`task_id`** and a hash of `.system/tasks/m<id>.json`, so execution maps cleanly to a stored breakdown.
+- **Ordering** — `depends_on` encodes safe sequencing (e.g. work before `mark_milestone_completed`).
+- **Policy** — Forge enforces decomposition before execution so operators pick (or flow through) an explicit unit of work, rather than an ambiguous “whole milestone” apply.
 
 ---
 
@@ -242,17 +261,15 @@ forge vertical-slice --vision-file ./notes/vision.txt
 forge status
 forge milestone-list
 forge milestone-next
-forge milestone-preview 1                  # optional: milestone id
-forge milestone-preview 1 --save-plan      # persist reviewed plan
+forge milestone-preview 1                  # lists tasks; add --task <n> to preview
+forge milestone-preview 1 --task 1 --save-plan   # persist task-scoped reviewed plan
 forge milestone-apply-plan <plan_id>       # apply saved plan + gates
-forge execute-next
+forge execute-next                         # next milestone’s next pending task
 ```
 
-For **smaller execution chunks**, run **`forge task-expand`** first, then use **`milestone-preview <id> --task <n>`** (see below).
+**Tasks (under each milestone)**
 
-**Tasks (optional, under a milestone)**
-
-After **`task-expand`**, walk tasks **in order** when they have **`depends_on`** (later tasks assume earlier ones are done).
+Tasks are **created automatically** when needed; use **`forge task-expand`** to refresh or inspect. Walk tasks **in order** when they have **`depends_on`**.
 
 ```bash
 forge task-expand --milestone 1            # 2–6 tasks by default (deterministic split)
@@ -277,7 +294,7 @@ forge milestone-generate --count 3
 Use the same **`forge-policy.json`** and **OpenAI environment variables** as in [Quick Start → Using an LLM (OpenAI)](#using-an-llm-openai). Then you can use LLM mode outside vertical slice, for example:
 
 ```bash
-forge milestone-preview 1 --planner llm
+forge milestone-preview 1 --task 1 --planner llm
 forge milestone-synthesize
 ```
 
@@ -295,7 +312,7 @@ forge workflow-guarded \
   --gate-test-cmd "pytest"
 ```
 
-Chains optional **milestone synthesis** (LLM), **preview/save plan** for a milestone, and **apply with gates**. Use `--accept-synthesized` / `--synthesis-id` when you want synthesized proposals merged into `docs/milestones.md` (see `forge workflow-guarded --help`). It does **not** run **`task-expand`**; use **`forge task-expand`** and **`--task`** on **`milestone-preview`** / **`milestone-apply-plan`** when you want multi-task slices.
+Chains optional **milestone synthesis** (LLM), **task expansion** (if needed), **preview/save plan** for the **next pending task** on the chosen milestone, and **apply with gates**. Use `--accept-synthesized` / `--synthesis-id` when you want synthesized proposals merged into `docs/milestones.md` (see `forge workflow-guarded --help`).
 
 ---
 
@@ -303,7 +320,7 @@ Chains optional **milestone synthesis** (LLM), **preview/save plan** for a miles
 
 After apply, Forge can run:
 
-* **Forge Validation** rules — for **milestone-only** plans, from `docs/milestones.md`; for **task** plans, rules are still evaluated the same way, but the **saved plan** was built from that task’s Forge Validation lines (often a copy of the milestone’s rules on each slice). **Milestone-level** post-apply checks still consult **`docs/milestones.md`** for that id.
+* **Forge Validation** rules — **new** reviewed plans are built from a **task** (often with Forge Validation lines copied from the milestone). **Milestone-level** post-apply checks still consult **`docs/milestones.md`** for that id. **Legacy** plans without **`task_id`** still apply using the milestone definition in docs until re-saved.
 * **Repository test command** (e.g. `pytest`), with timeout and captured output limits
 
 Example (apply an existing reviewed plan by id):
@@ -334,13 +351,13 @@ forge milestone-apply-plan \
 * **LLM-assisted** — optional for drafting specs, milestones, and LLM-backed plans; `--demo` and deterministic planners stay predictable
 * **Deterministic execution** — given a saved plan, apply behavior is reproducible
 * **Validation around apply** — Forge Validation + optional test command
-* **Explicit state** — reviewed plans, optional **per-milestone task JSON**, run history, and run logs on disk
+* **Explicit state** — reviewed plans, **per-milestone task JSON** (`.system/tasks/`), run history, and run logs on disk
 
 ---
 
 ## Summary
 
-Forge is a **spec-driven path from ideas to code to systems**: specs and milestones stay human- and machine-readable, the LLM can help draft them when you want, and Forge **executes and validates** so what lands in the repo is **real code** that **composes into a working system**—aligned with what you reviewed and proven by gates. **Task mode** splits milestones into **ordered, review-sized steps** in `.system/tasks/` without changing the execution engine: each step still becomes a reviewed plan and apply with the same gates semantics.
+Forge is a **spec-driven path from ideas to code to systems**: specs and milestones stay human- and machine-readable, the LLM can help draft them when you want, and Forge **executes and validates** through **tasks** so what lands in the repo is **real code** that **composes into a working system**—aligned with what you reviewed and proven by gates. **Milestones** stay the roadmap; **tasks** are the only executable slice the engine plans and applies.
 
 ---
 

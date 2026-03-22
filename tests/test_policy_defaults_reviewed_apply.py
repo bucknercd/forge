@@ -28,7 +28,7 @@ def _init_and_write_milestone(tmp_path, monkeypatch, capsys):
 def _save_plan_id(monkeypatch, capsys) -> str:
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-preview", "1", "--save-plan", "--json"],
+        ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"],
     )
     assert main() == 0
     preview = json.loads(capsys.readouterr().out)

@@ -217,8 +217,9 @@ Current file creation/edit support includes:
 See README Quick Start (vertical slice) for usage and expected behavior.
 
 #### Tasks (two-layer planning)
-- Task breakdowns live in **`.system/tasks/m<id>.json`**. **`forge task-expand`** writes **2–6 ordered tasks** via deterministic splitting of Forge Actions when possible (`mark_milestone_completed` + validation on the last task); optional LLM JSON expansion applies when a non-stub OpenAI client is configured and output validates. Otherwise it falls back to a **single compatibility task**. Existing files are left unchanged unless **`--force`** is set.
-- **`forge milestone-preview <id> --task <n>`** builds/saves reviewed plans from a task; plan ids **`m<id>-t<n>-<hash>`**; apply still uses **`milestone-apply-plan`** + gates (no review bypass).
+- **Execution is task-only:** preview, save-plan, **`execute-next`**, **`vertical-slice`**, and **`workflow-guarded`** ensure **`.system/tasks/m<id>.json`** exists (same expansion as **`forge task-expand`**) and operate on a **task id**—explicit **`--task`** or the **next pending task**. Milestones in **`docs/milestones.md`** are not executed directly.
+- Task JSON holds **2–6 ordered tasks** when deterministic splitting succeeds (`mark_milestone_completed` + validation on the last task); optional LLM JSON expansion when a non-stub OpenAI client is configured; else **one compatibility task**. **`--force`** on **`task-expand`** regenerates from the current milestone text.
+- **`forge milestone-preview <id>`** without **`--task`** lists tasks; with **`--task <n>`** builds/saves reviewed plans; plan ids **`m<id>-t<n>-<hash>`**; apply uses **`milestone-apply-plan`** + gates. Legacy reviewed plans without **`task_id`** may still apply against the milestone definition in docs.
 - Milestones may include optional **`- **Summary**:`** in `docs/milestones.md` for short roadmap text.
 
 #### Execution progress + run logs

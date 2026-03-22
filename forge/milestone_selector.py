@@ -65,6 +65,11 @@ class MilestoneSelector:
             if effective_status == "retry_pending":
                 return milestone, {"kind": "selected"}
 
+        # Task-based execution can leave a milestone in_progress while further tasks remain.
+        for milestone, effective_status, _ in derived:
+            if effective_status == "in_progress":
+                return milestone, {"kind": "selected"}
+
         for milestone, effective_status, _ in derived:
             if effective_status == "not_started":
                 return milestone, {"kind": "selected"}

@@ -27,7 +27,15 @@ from forge.reviewed_plan import (
     save_reviewed_plan,
     validate_reviewed_plan,
 )
-from forge.task_service import get_task, task_to_execution_milestone
+from forge.task_service import (
+    TASK_STATUS_COMPLETED,
+    all_tasks_completed,
+    ensure_tasks_for_milestone,
+    get_next_task,
+    get_task,
+    set_task_status,
+    task_to_execution_milestone,
+)
 
 MAX_RETRIES = 2
 
@@ -136,26 +144,204 @@ class Executor:
             return {"outcome": "none", "message": "No runnable milestones found."}
 
         milestone_id = next_milestone.id
-        Executor.execute_milestone(milestone_id)
 
+        expand = ensure_tasks_for_milestone(milestone_id)
+        if not expand.get("ok"):
+            return {
+                "outcome": "none",
+                "message": expand.get("message", "Could not ensure tasks for milestone."),
+            }
+
+        next_task = get_next_task(milestone_id)
+        if next_task is None:
+            if all_tasks_completed(milestone_id):
+                Executor._sync_milestone_state_all_tasks_done(milestone_id, next_milestone)
+            updated_state = state_repository.get(milestone_id)
+            if updated_state.get("status") == "completed":
+                return {
+                    "outcome": "complete",
+                    "milestone_id": milestone_id,
+                    "message": f"All tasks for milestone {milestone_id} are completed.",
+                }
+            return {
+                "outcome": "complete",
+                "milestone_id": milestone_id,
+                "message": f"Milestone {milestone_id} has no pending tasks.",
+            }
+
+        outcome = Executor._execute_next_task_step(
+            milestone_id,
+            next_milestone,
+            next_task.id,
+        )
         updated_state = state_repository.get(milestone_id)
         status = updated_state.get("status")
         if status == "completed":
             return {
                 "outcome": "complete",
                 "milestone_id": milestone_id,
-                "message": f"Milestone {milestone_id} completed.",
+                "task_id": next_task.id,
+                "message": f"Milestone {milestone_id} completed (all tasks done).",
             }
 
         return {
-            "outcome": "executed",
+            "outcome": "executed" if outcome.get("apply_ok") else "none",
             "milestone_id": milestone_id,
-            "message": f"Milestone {milestone_id} updated status={status}.",
+            "task_id": next_task.id,
+            "message": outcome.get("message")
+            or f"Milestone {milestone_id} task {next_task.id} executed; status={status}.",
         }
 
     @staticmethod
     def execute_milestone(milestone_id: int) -> None:
+        """Legacy full-milestone apply (non-reviewed). Prefer task-based ``execute_next``."""
         return Executor._execute_milestone_internal(milestone_id)
+
+    @staticmethod
+    def _load_milestone_state_file() -> dict:
+        state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+        if state_file.exists():
+            with state_file.open("r", encoding="utf-8") as file:
+                return json.load(file)
+        return {}
+
+    @staticmethod
+    def _write_milestone_state_file(state: dict) -> None:
+        state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        with state_file.open("w", encoding="utf-8") as file:
+            json.dump(state, file, indent=4)
+
+    @staticmethod
+    def _sync_milestone_state_all_tasks_done(milestone_id: int, milestone) -> None:
+        """If every task is completed, ensure roadmap state reflects milestone completion."""
+        if not all_tasks_completed(milestone_id):
+            return
+        state = Executor._load_milestone_state_file()
+        normalized_changed = False
+        for k in list(state.keys()):
+            if isinstance(state.get(k), str):
+                normalized_changed = True
+            state[k] = normalize_milestone_state_value(state.get(k))
+        if normalized_changed:
+            Executor._write_milestone_state_file(state)
+        ms = normalize_milestone_state_value(state.get(str(milestone_id)))
+        if ms["status"] == "completed":
+            return
+        ms["status"] = "completed"
+        state[str(milestone_id)] = ms
+        Executor._write_milestone_state_file(state)
+
+    @staticmethod
+    def _execute_next_task_step(
+        milestone_id: int,
+        milestone,
+        task_id: int,
+    ) -> dict:
+        """
+        Apply the next task using a saved reviewed plan (deterministic save + apply + gates).
+        Updates milestone state on failure; successful task completion is recorded in
+        ``apply_reviewed_plan_with_gates``.
+        """
+        state_file = Paths.SYSTEM_DIR / "milestone_state.json"
+        state = Executor._load_milestone_state_file()
+        normalized_changed = False
+        for k in list(state.keys()):
+            if isinstance(state.get(k), str):
+                normalized_changed = True
+            state[k] = normalize_milestone_state_value(state.get(k))
+        if normalized_changed:
+            Executor._write_milestone_state_file(state)
+
+        milestone_state = normalize_milestone_state_value(state.get(str(milestone_id)))
+
+        deps_ok = True
+        for dep_id in getattr(milestone, "depends_on", []):
+            dep_state = normalize_milestone_state_value(state.get(str(dep_id)))
+            if dep_state["status"] != "completed":
+                deps_ok = False
+                break
+
+        runnable_statuses = {"not_started", "retry_pending", "in_progress"}
+        if milestone_state["status"] not in runnable_statuses:
+            return {
+                "apply_ok": False,
+                "message": "Milestone is not runnable in its current state.",
+            }
+
+        if not deps_ok:
+            return {
+                "apply_ok": False,
+                "message": "Milestone is blocked by unmet prerequisites.",
+            }
+
+        milestone_state["attempts"] += 1
+        milestone_state["status"] = "in_progress"
+        state[str(milestone_id)] = milestone_state
+        Executor._write_milestone_state_file(state)
+
+        entry = RunHistoryEntry(
+            task=f"Execute milestone {milestone_id} task {task_id} "
+            f"(Attempt {milestone_state['attempts']})",
+            summary=f"{milestone.title}: task {task_id}",
+            status="started",
+            timestamp=datetime.now(),
+        )
+        RunHistory.log_run(entry)
+
+        save = Executor.save_reviewed_plan_for_task(
+            milestone_id,
+            task_id,
+            planner=DeterministicPlanner(),
+        )
+        if not save.get("ok"):
+            Executor._finalize_failed_or_retry(
+                milestone_id,
+                milestone,
+                milestone_state,
+                state,
+                state_file,
+                Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json",
+                reason=save.get("message", "Plan save failed."),
+            )
+            return {
+                "apply_ok": False,
+                "message": save.get("message", "Plan save failed."),
+            }
+
+        plan_id = save.get("plan_id")
+        if not plan_id:
+            Executor._finalize_failed_or_retry(
+                milestone_id,
+                milestone,
+                milestone_state,
+                state,
+                state_file,
+                Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json",
+                reason="No plan_id from save step.",
+            )
+            return {"apply_ok": False, "message": "No plan_id from save step."}
+
+        apply_res = Executor.apply_reviewed_plan_with_gates(
+            plan_id,
+            run_validation_gate=True,
+            test_command=None,
+        )
+
+        if not apply_res.get("ok"):
+            err = apply_res.get("message") or "Apply or gates failed."
+            Executor._finalize_failed_or_retry(
+                milestone_id,
+                milestone,
+                milestone_state,
+                state,
+                state_file,
+                Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json",
+                reason=err,
+            )
+            return {"apply_ok": False, "message": err}
+
+        return {"apply_ok": True, "message": apply_res.get("message", "")}
 
     @staticmethod
     def preview_milestone(
@@ -165,11 +351,10 @@ class Executor:
         task_id: int | None = None,
     ) -> dict:
         """
-        Build and simulate a milestone execution plan without side effects.
+        Build and simulate an execution plan for a **task** under the milestone.
 
-        When ``task_id`` is set, the plan is built from the task breakdown under
-        ``.system/tasks/m<milestone_id>.json`` (parent milestone id is still used
-        for ``mark_milestone_completed`` targets).
+        ``task_id`` is required. The plan is built from ``.system/tasks/m<milestone_id>.json``;
+        the parent milestone id is still used for ``mark_milestone_completed`` targets.
         """
         try:
             parent = MilestoneService.get_milestone(milestone_id)
@@ -179,17 +364,36 @@ class Executor:
             return {"ok": False, "message": "Invalid milestone ID."}
 
         if task_id is not None:
-            task = get_task(milestone_id, task_id)
-            if not task:
+            ens = ensure_tasks_for_milestone(milestone_id)
+            if not ens.get("ok"):
                 return {
                     "ok": False,
-                    "message": f"Unknown task {task_id} for milestone {milestone_id}. "
-                    f"Run `forge task-expand --milestone {milestone_id}` first.",
+                    "message": ens.get("message", "Could not ensure tasks for milestone."),
                     "milestone_id": milestone_id,
                 }
-            milestone = task_to_execution_milestone(parent, task)
-        else:
-            milestone = parent
+
+        if task_id is None:
+            return {
+                "ok": False,
+                "message": (
+                    "Execution requires a task. List tasks with "
+                    f"`forge task-list --milestone {milestone_id}` and pass `--task <n>`."
+                ),
+                "requires_task_selection": True,
+                "milestone_id": milestone_id,
+            }
+
+        task = get_task(milestone_id, task_id)
+        if not task:
+            return {
+                "ok": False,
+                "message": (
+                    f"Unknown task {task_id} for milestone {milestone_id}. "
+                    f"Run `forge task-expand --milestone {milestone_id}` first."
+                ),
+                "milestone_id": milestone_id,
+            }
+        milestone = task_to_execution_milestone(parent, task)
 
         planner = planner or DeterministicPlanner()
         try:
@@ -198,8 +402,7 @@ class Executor:
         except ValueError as exc:
             return {"ok": False, "message": str(exc), "milestone_id": milestone_id}
 
-        if task_id is not None:
-            plan.task_id = task_id
+        plan.task_id = task_id
 
         planner_meta = planner.metadata()
         warnings = _planner_warnings(planner_meta, plan)
@@ -218,48 +421,8 @@ class Executor:
             "errors": preview.errors,
             "warnings": warnings,
         }
-        if task_id is not None:
-            out["task_id"] = task_id
+        out["task_id"] = task_id
         return out
-
-    @staticmethod
-    def save_reviewed_plan_for_milestone(
-        milestone_id: int,
-        planner: Planner | None = None,
-        review_enforcement: dict | None = None,
-        event_bus: object | None = None,
-    ) -> dict:
-        planner = planner or DeterministicPlanner()
-        preview = Executor.preview_milestone(milestone_id, planner=planner)
-        if not preview.get("ok"):
-            return preview
-        try:
-            milestone = MilestoneService.get_milestone(milestone_id)
-            if not milestone:
-                return {"ok": False, "message": "Invalid milestone ID."}
-            plan = ExecutionPlan.from_serializable(preview["execution_plan"])
-            payload = save_reviewed_plan(
-                milestone_id,
-                milestone.title,
-                plan,
-                planner_mode=planner.mode,
-                planner_metadata=preview.get("planner_metadata", planner.metadata()),
-                warnings=preview.get("warnings", []),
-                review_enforcement=review_enforcement,
-            )
-            preview["plan_id"] = payload["plan_id"]
-            plan_path = Paths.SYSTEM_DIR / "reviewed_plans" / f"{payload['plan_id']}.json"
-            preview["plan_file"] = str(plan_path)
-            preview["review_enforcement"] = payload.get("review_enforcement", review_enforcement or {})
-            as_emitter(event_bus).emit(
-                PLAN_SAVED,
-                plan_id=payload["plan_id"],
-                milestone_id=milestone_id,
-                plan_file=str(plan_path),
-            )
-            return preview
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "message": f"Failed to save reviewed plan: {exc}"}
 
     @staticmethod
     def save_reviewed_plan_for_task(
@@ -270,6 +433,12 @@ class Executor:
         event_bus: object | None = None,
     ) -> dict:
         """Preview/save a reviewed plan built from a task under ``milestone_id``."""
+        ens = ensure_tasks_for_milestone(milestone_id)
+        if not ens.get("ok"):
+            return {
+                "ok": False,
+                "message": ens.get("message", "Could not ensure tasks for milestone."),
+            }
         planner = planner or DeterministicPlanner()
         preview = Executor.preview_milestone(
             milestone_id, planner=planner, task_id=task_id
@@ -332,7 +501,21 @@ class Executor:
                 "ok": False,
                 "message": "Progress is blocked by failed/unmet prerequisites.",
             }
-        return Executor.preview_milestone(next_milestone.id)
+        mid = next_milestone.id
+        ens = ensure_tasks_for_milestone(mid)
+        if not ens.get("ok"):
+            return {"ok": False, "message": ens.get("message", "Could not ensure tasks.")}
+        nt = get_next_task(mid)
+        if nt is None:
+            return {
+                "ok": False,
+                "message": (
+                    f"No pending tasks for milestone {mid} "
+                    "(all tasks may already be completed)."
+                ),
+                "milestone_id": mid,
+            }
+        return Executor.preview_milestone(mid, task_id=nt.id)
 
     @staticmethod
     def apply_reviewed_plan(plan_id: str) -> dict:
@@ -456,6 +639,34 @@ class Executor:
         ok_final = apply_ok and gates_ok
         gate_summary = summarize_gate_results(gates)
         artifact_summary = apply_result.human_summary()
+
+        if task_id is not None and ok_final:
+            set_task_status(milestone_id, task_id, TASK_STATUS_COMPLETED)
+            if all_tasks_completed(milestone_id):
+                sync_state = Executor._load_milestone_state_file()
+                for k in list(sync_state.keys()):
+                    sync_state[k] = normalize_milestone_state_value(sync_state.get(k))
+                ms_done = normalize_milestone_state_value(
+                    sync_state.get(str(milestone_id))
+                )
+                ms_done["status"] = "completed"
+                sync_state[str(milestone_id)] = ms_done
+                Executor._write_milestone_state_file(sync_state)
+                if not _plan_has_add_decision(reviewed_plan):
+                    DecisionTracker.append_milestone_success_decision(
+                        milestone_id=milestone_id,
+                        milestone_title=milestone.title,
+                        summary=_build_execution_summary(
+                            len(reviewed_plan.actions), apply_result
+                        ),
+                    )
+                entry = RunHistoryEntry(
+                    task=f"Execute milestone {milestone_id} (all tasks complete)",
+                    summary=f"{milestone.title}: all tasks applied",
+                    status="completed",
+                    timestamp=datetime.now(),
+                )
+                RunHistory.log_run(entry)
 
         result_payload = {
             "kind": "reviewed_plan_apply",

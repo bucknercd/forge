@@ -19,7 +19,7 @@ def test_preview_save_plan_and_apply_success(tmp_path):
 {forge_block("REVIEWED_OK")}
 """,
     )
-    preview = Executor.save_reviewed_plan_for_milestone(1)
+    preview = Executor.save_reviewed_plan_for_task(1, 1)
     assert preview["ok"] is True
     assert preview.get("plan_id")
     assert preview["planner_metadata"]["mode"] == "deterministic"
@@ -50,7 +50,7 @@ def test_apply_reviewed_plan_fails_when_artifact_changed(tmp_path):
 {forge_block("STALE")}
 """,
     )
-    preview = Executor.save_reviewed_plan_for_milestone(1)
+    preview = Executor.save_reviewed_plan_for_task(1, 1)
     plan_id = preview["plan_id"]
     Paths.REQUIREMENTS_FILE.write_text("# Requirements\n\n## Overview\n\nchanged externally\n", encoding="utf-8")
     res = Executor.apply_reviewed_plan(plan_id)
@@ -71,7 +71,7 @@ def test_apply_reviewed_plan_fails_when_milestone_definition_changed(tmp_path):
 {forge_block("OLD")}
 """,
     )
-    preview = Executor.save_reviewed_plan_for_milestone(1)
+    preview = Executor.save_reviewed_plan_for_task(1, 1)
     plan_id = preview["plan_id"]
     Paths.MILESTONES_FILE.write_text(
         f"""
@@ -87,7 +87,7 @@ def test_apply_reviewed_plan_fails_when_milestone_definition_changed(tmp_path):
     )
     res = Executor.apply_reviewed_plan(plan_id)
     assert res["ok"] is False
-    assert "no longer matches current milestone definition" in res["message"]
+    assert "Milestones file changed" in res["message"] or "no longer matches" in res["message"]
 
 
 def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
@@ -108,7 +108,9 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--save-plan", "--json"])
+    monkeypatch.setattr(
+        "sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"]
+    )
     assert main() == 0
     preview_payload = json.loads(capsys.readouterr().out)
     assert preview_payload["ok"] is True
@@ -140,7 +142,7 @@ def test_apply_reviewed_plan_with_validation_gate_fail(tmp_path):
 {forge_block("GATE_VALID_FAIL")}
 """,
     )
-    preview = Executor.save_reviewed_plan_for_milestone(1)
+    preview = Executor.save_reviewed_plan_for_task(1, 1)
     plan_id = preview["plan_id"]
 
     # Break validation rule after review while keeping plan applyable.
@@ -162,7 +164,7 @@ def test_apply_reviewed_plan_with_validation_gate_fail(tmp_path):
     )
     # Plan mismatch due to changed milestones hash would block earlier.
     # Re-save reviewed plan against updated milestones, then force validation failure via rule.
-    preview2 = Executor.save_reviewed_plan_for_milestone(1)
+    preview2 = Executor.save_reviewed_plan_for_task(1, 1)
     plan_id2 = preview2["plan_id"]
     res = Executor.apply_reviewed_plan_with_gates(
         plan_id2, run_validation_gate=True, test_command=None
@@ -191,7 +193,7 @@ def test_apply_reviewed_plan_with_test_gate_fail(tmp_path):
 {forge_block("GATE_TEST_FAIL")}
 """,
     )
-    preview = Executor.save_reviewed_plan_for_milestone(1)
+    preview = Executor.save_reviewed_plan_for_task(1, 1)
     plan_id = preview["plan_id"]
     res = Executor.apply_reviewed_plan_with_gates(
         plan_id,
@@ -221,7 +223,9 @@ def test_cli_apply_plan_json_includes_gate_results(tmp_path, monkeypatch, capsys
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--save-plan", "--json"])
+    monkeypatch.setattr(
+        "sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"]
+    )
     assert main() == 0
     plan_id = json.loads(capsys.readouterr().out)["plan_id"]
 

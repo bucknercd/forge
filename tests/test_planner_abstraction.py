@@ -8,7 +8,7 @@ from forge.executor import Executor
 from forge.llm import LLMClient
 from forge.paths import Paths
 from forge.planner import DeterministicPlanner, LLMPlanner
-from tests.forge_test_project import configure_project, forge_block
+from tests.forge_test_project import compat_forge_block, configure_project, forge_block
 
 
 class FakeLLM(LLMClient):
@@ -179,7 +179,7 @@ def test_llm_generated_plan_flows_through_reviewed_save_and_apply(tmp_path):
             )
         )
     )
-    preview = Executor.save_reviewed_plan_for_milestone(1, planner=planner)
+    preview = Executor.save_reviewed_plan_for_task(1, 1, planner=planner)
     assert preview["ok"] is True
     assert preview["planner_mode"] == "llm"
     assert preview["planner_metadata"]["is_nondeterministic"] is True
@@ -198,20 +198,21 @@ def test_llm_generated_plan_flows_through_reviewed_save_and_apply(tmp_path):
 def test_llm_preview_warns_for_suspicious_duplicate_heavy_plan(tmp_path):
     configure_project(
         tmp_path,
-        """
+        f"""
 # Milestones
 
 ## Milestone 1: LLM Suspicious
 - **Objective**: O
 - **Scope**: S
 - **Validation**: V
+{compat_forge_block("DUPBASE")}
 """,
     )
     milestone = MilestoneService.get_milestone(1)
     assert milestone is not None
     many = ["append_section requirements Overview | DUP"] * 13 + ["mark_milestone_completed"]
     planner = LLMPlanner(FakeLLM(json.dumps({"actions": many})))
-    preview = Executor.preview_milestone(1, planner=planner)
+    preview = Executor.preview_milestone(1, planner=planner, task_id=1)
     assert preview["ok"] is True
     text = " ".join(preview.get("warnings", []))
     assert "non-deterministic" in text

@@ -36,6 +36,8 @@ def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
         "review_enforcement": payload.get("review_enforcement", {}),
         "milestone_id": payload.get("milestone_id"),
         "task_id": payload.get("task_id"),
+        "requires_task_selection": bool(payload.get("requires_task_selection", False)),
+        "tasks": payload.get("tasks"),
         "title": payload.get("title"),
         "message": payload.get("message", ""),
         "artifact_summary": payload.get("artifact_summary", ""),
@@ -43,7 +45,7 @@ def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
         "planned_actions": payload.get("execution_plan", {}).get("actions", []),
         "actions_applied": payload.get("actions_applied", []),
         "warnings": payload.get("warnings", []),
-        "errors": payload.get("errors", []),
+        "errors": list(payload.get("errors", [])),
         "summary_counts": _summary_counts(payload.get("actions_applied", [])),
     }
 

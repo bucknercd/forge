@@ -12,6 +12,7 @@ from pathlib import Path
 
 from forge.design_manager import DesignManager, MilestoneService
 from forge.executor import Executor
+from forge.task_service import ensure_tasks_for_milestone, get_next_task
 from forge.llm import LLMClient
 from forge.llm_resolve import resolve_llm_client_from_policy
 from forge.paths import Paths
@@ -632,10 +633,24 @@ def run_vertical_slice(
     bus.emit(
         PHASE_STARTED,
         phase="plan",
-        label="preview milestone and save reviewed plan",
+        label="ensure tasks, preview next task, save reviewed plan",
     )
-    preview = Executor.save_reviewed_plan_for_milestone(
+    expand = ensure_tasks_for_milestone(milestone_id)
+    if not expand.get("ok"):
+        stages.append({"stage": "task_expand", **expand})
+        bus.emit(RUN_FAILED, reason=expand.get("message", "task expand failed"), phase="plan")
+        bus.emit(RUN_COMPLETED, ok=False)
+        return _finalize(stages, ok=False)
+    nt = get_next_task(milestone_id)
+    if nt is None:
+        msg = f"No pending tasks for milestone {milestone_id}."
+        stages.append({"stage": "preview_save_plan", "ok": False, "message": msg})
+        bus.emit(RUN_FAILED, reason=msg, phase="plan")
+        bus.emit(RUN_COMPLETED, ok=False)
+        return _finalize(stages, ok=False)
+    preview = Executor.save_reviewed_plan_for_task(
         milestone_id,
+        nt.id,
         planner=planner,
         review_enforcement=enforcement,
         event_bus=bus,
