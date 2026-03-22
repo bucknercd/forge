@@ -42,8 +42,10 @@ from forge.milestone_llm_quality import (
 )
 from forge.vertical_slice_json import (
     STRICT_JSON_RETRY_SUFFIX,
+    JsonExtractFailure,
     VerticalSliceLlmJsonError,
     parse_vertical_slice_bundle_dict,
+    write_llm_bundle_extraction_debug_artifact,
     write_llm_bundle_raw_artifact,
 )
 from forge.vision import VisionManager
@@ -510,7 +512,11 @@ def _milestones_rules_block() -> str:
 def _build_idea_prompt(idea: str) -> str:
     return (
         "You are Forge. Produce a small vertical slice for the user's idea.\n"
-        "Return ONLY JSON (no markdown fences) with this shape:\n"
+        "INTERNAL TRANSPORT (machine-readable, not shown to end users): "
+        "respond with exactly ONE JSON object parseable by Python json.loads().\n"
+        "Do not wrap in markdown code fences (no ```). Do not add prose before or after the JSON.\n"
+        "Do not emit multiple JSON objects or arrays at the top level.\n\n"
+        "Required shape (all string values, escape newlines as \\n inside strings):\n"
         '{"vision": "<short string>", "requirements_md": "<markdown>", '
         '"architecture_md": "<markdown>", "milestones_md": "<markdown>"}\n\n'
         + _product_docs_rules_block()
@@ -524,7 +530,11 @@ def _build_fixed_vision_prompt(vision: str) -> str:
         "You are Forge. The following text is the AUTHORITATIVE project vision.\n"
         "Do not rewrite, summarize, or replace it in your output; you will not return a vision field.\n"
         "Generate requirements, architecture, and milestones that implement this vision.\n"
-        "Return ONLY JSON (no markdown fences) with this shape:\n"
+        "INTERNAL TRANSPORT (machine-readable, not shown to end users): "
+        "respond with exactly ONE JSON object parseable by Python json.loads().\n"
+        "Do not wrap in markdown code fences (no ```). Do not add prose before or after the JSON.\n"
+        "Do not emit multiple JSON objects or arrays at the top level.\n\n"
+        "Required shape:\n"
         '{"requirements_md": "<markdown>", "architecture_md": "<markdown>", '
         '"milestones_md": "<markdown>"}\n\n'
         + _product_docs_rules_block()
@@ -615,10 +625,43 @@ def _llm_vertical_slice_bundle_loop(
                 recent_paths.append(str(apath))
 
             try:
-                data, _jtxt, _kind = parse_vertical_slice_bundle_dict(
+                data, _jtxt, _kind, _trace = parse_vertical_slice_bundle_dict(
                     raw, required_keys=required_keys
                 )
+            except JsonExtractFailure as exc:
+                write_llm_bundle_extraction_debug_artifact(
+                    bundle_llm_artifact_dir,
+                    sequence=seq,
+                    trace=exc.trace,
+                    error_message=str(exc),
+                )
+                if json_attempt == 0:
+                    json_strict = STRICT_JSON_RETRY_SUFFIX
+                    continue
+                tail = recent_paths[-2:] if len(recent_paths) >= 2 else recent_paths
+                diag = {
+                    "kind": "json_extract",
+                    "strategies_attempted": list(exc.trace.strategies_attempted),
+                    "response_length": exc.trace.response_length,
+                    "response_prefix": exc.trace.response_prefix,
+                }
+                msg = (
+                    f"{exc} "
+                    f"Vertical-slice bundle JSON failed after 2 attempts (extraction + parse). "
+                    f"Inspect raw model output: {'; '.join(tail)}"
+                )
+                raise VerticalSliceLlmJsonError(
+                    msg,
+                    artifact_paths=tail,
+                    extraction_diagnostics=diag,
+                ) from exc
             except ValueError as exc:
+                write_llm_bundle_extraction_debug_artifact(
+                    bundle_llm_artifact_dir,
+                    sequence=seq,
+                    trace=None,
+                    error_message=str(exc),
+                )
                 if json_attempt == 0:
                     json_strict = STRICT_JSON_RETRY_SUFFIX
                     continue
@@ -835,25 +878,31 @@ def run_vertical_slice(
             except VerticalSliceLlmJsonError as exc:
                 msg = str(exc)
                 paths = list(exc.artifact_paths)
-                stages.append(
-                    {
-                        "stage": "llm_generation",
-                        "ok": False,
-                        "mode": doc_mode,
-                        "message": msg,
-                        "llm_bundle_raw_paths": paths,
-                        "json_parse_failed": True,
-                        "json_attempts": 2,
-                    }
-                )
+                stage_row: dict = {
+                    "stage": "llm_generation",
+                    "ok": False,
+                    "mode": doc_mode,
+                    "message": msg,
+                    "llm_bundle_raw_paths": paths,
+                    "json_parse_failed": True,
+                    "json_attempts": 2,
+                }
+                if exc.extraction_diagnostics:
+                    stage_row["json_extraction_diagnostics"] = exc.extraction_diagnostics
+                stages.append(stage_row)
+                emit_data = {
+                    "llm_bundle_raw_paths": paths,
+                    "json_parse_failed": True,
+                    "json_attempts": 2,
+                }
+                if exc.extraction_diagnostics:
+                    emit_data["json_extraction_diagnostics"] = exc.extraction_diagnostics
                 bus.emit(
                     PHASE_COMPLETED,
                     phase="llm_generation",
                     ok=False,
                     message=msg,
-                    llm_bundle_raw_paths=paths,
-                    json_parse_failed=True,
-                    json_attempts=2,
+                    **emit_data,
                 )
                 bus.emit(RUN_FAILED, reason=msg, phase="llm_generation")
                 bus.emit(RUN_COMPLETED, ok=False)

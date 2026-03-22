@@ -216,6 +216,8 @@ Current file creation/edit support includes:
 
 See README Quick Start (vertical slice) for usage and expected behavior.
 
+**LLM bundle JSON (internal):** The model is asked for a single `json.loads`-parseable object (not user-facing UX). Extraction tolerates harmless noise (leading/trailing prose, a single markdown fenced JSON block, or the longest unambiguous balanced `{...}`). Ambiguous output (e.g. two same-length top-level objects) or invalid JSON is rejected; failures persist `llm_bundle_raw_*.txt` and optional `llm_bundle_extract_debug_*.txt` under the run artifact dir for debugging.
+
 #### Tasks (two-layer planning)
 - **Execution is task-only:** preview, save-plan, **`run-next`**, **`vertical-slice`**, and **`workflow-guarded`** ensure **`.system/tasks/m<id>.json`** exists (same expansion as **`forge task-expand`**) and operate on a **task id**—explicit **`--task`** or the **next pending task**. Milestones in **`docs/milestones.md`** are not executed directly.
 - Task JSON holds **2–6 ordered tasks** when deterministic splitting succeeds (`mark_milestone_completed` + validation on the last task); optional LLM JSON expansion when a non-stub OpenAI client is configured; else **one compatibility task**. **`--force`** on **`task-expand`** regenerates from the current milestone text.

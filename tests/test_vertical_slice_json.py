@@ -12,7 +12,9 @@ from forge.run_event_handlers import EventListCollector, JsonlRunLogHandler
 from forge.run_events import RunEventBus
 from forge.vertical_slice import generate_bundle_from_llm, run_vertical_slice
 from forge.vertical_slice_json import (
+    JsonExtractFailure,
     VerticalSliceLlmJsonError,
+    extract_vertical_slice_json_inner,
     extract_vertical_slice_json_text,
     parse_vertical_slice_bundle_dict,
     write_llm_bundle_raw_artifact,
@@ -72,7 +74,77 @@ def test_extract_prose_before_json():
 def test_parse_vertical_slice_bundle_dict_requires_keys():
     d = {"vision": "v"}
     with pytest.raises(ValueError, match="missing keys"):
-        parse_vertical_slice_bundle_dict(json.dumps(d), required_keys=("vision", "milestones_md"))
+        parse_vertical_slice_bundle_dict(
+            json.dumps(d), required_keys=("vision", "milestones_md")
+        )
+
+
+def test_balanced_extract_allows_apostrophe_inside_json_string():
+    """Regression: old balancer treated ' as string delimiter and broke on it's."""
+    raw = (
+        'Sure.\n{"vision": "v", "requirements_md": "x", "architecture_md": "y", '
+        '"milestones_md": "it\'s ok"}\n'
+    )
+    text, kind = extract_vertical_slice_json_text(raw)
+    assert kind == "balanced_object"
+    assert json.loads(text)["milestones_md"] == "it's ok"
+
+
+def test_two_top_level_json_objects_is_ambiguous():
+    raw = '{"a":1}{"b":2}'
+    with pytest.raises(JsonExtractFailure, match="ambiguous"):
+        extract_vertical_slice_json_inner(raw)
+
+
+def test_truncated_json_no_valid_candidate():
+    raw = '{"vision": "v", "requirements_md": "'
+    with pytest.raises(JsonExtractFailure):
+        extract_vertical_slice_json_inner(raw)
+
+
+def test_invalid_json_not_accepted_as_candidate():
+    """Trailing comma etc. never becomes a candidate (must json.loads as object)."""
+    raw = '```json\n{"vision": 1,}\n```'  # invalid strict JSON
+    with pytest.raises(JsonExtractFailure):
+        extract_vertical_slice_json_inner(raw)
+
+
+def test_fenced_json_with_leading_prose_succeeds_single_llm_call(tmp_path, monkeypatch):
+    """One response: prose + ```json fence + trailing prose — still extracts unambiguously."""
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    good = json.dumps(_idea_bundle_dict())
+    client = _SeqLLM(
+        [
+            "Here is the JSON:\n```json\n" + good + "\n```\nHope this helps.",
+        ]
+    )
+    bundle = generate_bundle_from_llm(
+        "Build logcheck tool for syslog parsing",
+        client,
+        bundle_llm_artifact_dir=tmp_path / "art",
+    )
+    assert client._i == 1
+    assert "logcheck" in bundle.milestones_md.lower()
+
+
+def test_integration_invalid_then_fenced_valid_bundle(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    good = json.dumps(_idea_bundle_dict())
+    client = _SeqLLM(
+        [
+            "preamble only { broken",
+            "Here is the JSON:\n```json\n" + good + "\n```\nHope this helps.",
+        ]
+    )
+    bundle = generate_bundle_from_llm(
+        "Build logcheck tool for syslog parsing",
+        client,
+        bundle_llm_artifact_dir=tmp_path / "art",
+    )
+    assert client._i == 2
+    assert "logcheck" in bundle.milestones_md.lower()
 
 
 class _SeqLLM(LLMClient):
