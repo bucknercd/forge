@@ -157,20 +157,43 @@ class MilestoneService:
         header_line = block_start_line + block[:idx].count("\n")
         lines: List[tuple[int, str]] = []
         saw_non_empty = False
+        current_chunks: List[str] = []
+        current_start_line: int | None = None
+
         for i, line in enumerate(rest.splitlines(), start=1):
             line_no = header_line + i
             stripped = line.strip()
             if stripped.startswith("- **"):
+                if current_chunks and current_start_line is not None:
+                    lines.append(
+                        (current_start_line, "\n".join(current_chunks).strip())
+                    )
+                current_chunks = []
+                current_start_line = None
                 break
             if stripped:
                 saw_non_empty = True
             if stripped.startswith("- ") and not stripped.startswith("- **"):
-                lines.append((line_no, stripped[2:].strip()))
-            elif stripped and not stripped.startswith("- "):
-                raise ValueError(
-                    f"Milestone {milestone_id} malformed {field} at line {line_no}: "
-                    "expected list item starting with '- '."
-                )
+                if current_chunks and current_start_line is not None:
+                    lines.append(
+                        (current_start_line, "\n".join(current_chunks).strip())
+                    )
+                current_chunks = [stripped[2:].strip()]
+                current_start_line = line_no
+            elif stripped == "":
+                if current_chunks:
+                    current_chunks.append("")
+            elif stripped:
+                if not current_chunks:
+                    raise ValueError(
+                        f"Milestone {milestone_id} malformed {field} at line {line_no}: "
+                        "continuation line before first '- ' list item."
+                    )
+                current_chunks.append(stripped)
+
+        if current_chunks and current_start_line is not None:
+            lines.append((current_start_line, "\n".join(current_chunks).strip()))
+
         if saw_non_empty and not lines:
             raise ValueError(
                 f"Milestone {milestone_id} malformed {field} near line {header_line}: "

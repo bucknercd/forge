@@ -181,3 +181,81 @@ def test_missing_validation_detected():
     with pytest.raises(ValueError) as exc:
         MilestoneService.parse_milestones(content)
     assert "validation" in str(exc.value).lower()
+
+
+def test_parse_forge_actions_multiline_list_item():
+    """Non-``- `` lines continue the previous Forge Actions bullet (e.g. wrapped write_file)."""
+    content = """# Milestones
+
+## Milestone 1: With Forge
+- **Objective**: O1
+- **Scope**: S1
+- **Validation**: V1
+- **Forge Actions**:
+  - write_file src/foo.py | import os
+
+def main():
+    pass
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements HELLO
+"""
+    milestones = MilestoneService.parse_milestones(content)
+    assert milestones[0].forge_actions[0].startswith("write_file src/foo.py |")
+    assert "def main():" in milestones[0].forge_actions[0]
+    assert milestones[0].forge_actions[1] == "mark_milestone_completed"
+
+
+def test_parse_forge_validation_wrapped_line():
+    content = """# Milestones
+
+## Milestone 1: With Forge
+- **Objective**: O1
+- **Scope**: S1
+- **Validation**: V1
+- **Forge Actions**:
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains examples/a.py def
+    main
+"""
+    milestones = MilestoneService.parse_milestones(content)
+    assert "def" in milestones[0].forge_validation[0]
+    assert "main" in milestones[0].forge_validation[0]
+
+
+def test_parse_forge_actions_continuation_before_first_bullet_raises():
+    content = """# Milestones
+
+## Milestone 1: Bad Block
+- **Objective**: O1
+- **Scope**: S1
+- **Validation**: V1
+- **Forge Actions**:
+  orphan line without bullet
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements x
+"""
+    with pytest.raises(ValueError) as exc:
+        MilestoneService.parse_milestones(content)
+    assert "continuation" in str(exc.value).lower()
+
+
+def test_parse_forge_list_terminates_at_next_bold_field():
+    """``- **Forge Validation**:` (or other ``- **...**:`) ends the Forge Actions list."""
+    content = """# Milestones
+
+## Milestone 1: T
+- **Objective**: o
+- **Scope**: s
+- **Validation**: v
+- **Forge Actions**:
+  - only_action
+- **Forge Validation**:
+  - file_contains requirements z
+- **Summary**: Should not be parsed as a forge action
+"""
+    milestones = MilestoneService.parse_milestones(content)
+    assert milestones[0].forge_actions == ["only_action"]
+    assert milestones[0].forge_validation == ["file_contains requirements z"]

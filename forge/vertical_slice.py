@@ -94,6 +94,91 @@ def _escape_write_body(text: str) -> str:
     return text.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "")
 
 
+def _repair_multiline_write_file_actions(md: str) -> tuple[str, list[str]]:
+    """
+    Collapse real newlines inside list items of the form
+    ``- write_file <path> | <body>`` into a single line with escaped ``\\n`` bodies.
+
+    LLMs often emit the body on following lines; the milestone list parser expects one
+    bullet per line. Runs before :func:`repair_llm_milestones_md`.
+    """
+    warnings: list[str] = []
+    lines = md.splitlines()
+    out: list[str] = []
+    folded_any = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        st = line.strip()
+        if st.startswith("- ") and not st.startswith("- **"):
+            text = st[2:].strip()
+            if text.startswith("write_file ") and "|" in text:
+                wf_head, rest = text.split("|", 1)
+                wf_head = wf_head.strip()
+                first = rest.strip()
+                body_parts: list[str] = []
+                if first:
+                    body_parts.append(first)
+                j = i + 1
+                while j < len(lines):
+                    s2t = lines[j].strip()
+                    if s2t.startswith("- **"):
+                        break
+                    if s2t.startswith("- ") and not s2t.startswith("- **"):
+                        break
+                    if s2t == "":
+                        body_parts.append("")
+                    else:
+                        body_parts.append(s2t)
+                    j += 1
+                if j > i + 1:
+                    folded_any = True
+                    body = "\n".join(body_parts)
+                    esc = _escape_write_body(body)
+                    indent_m = re.match(r"^(\s*)", line)
+                    indent = indent_m.group(1) if indent_m else ""
+                    out.append(f"{indent}- {wf_head} | {esc}")
+                    i = j
+                    continue
+        out.append(line)
+        i += 1
+    result = "\n".join(out)
+    if md.endswith("\n"):
+        result += "\n"
+    w: list[str] = []
+    if folded_any:
+        w.append(
+            "Folded multiline write_file body into a single line with escaped newlines."
+        )
+    return result, w
+
+
+def _persist_milestone_md_failure_artifacts(
+    failure_artifact_dir: Path,
+    *,
+    raw_md: str,
+    normalized: str = "",
+    folded: str = "",
+    repaired: str = "",
+) -> None:
+    failure_artifact_dir.mkdir(parents=True, exist_ok=True)
+    (failure_artifact_dir / "milestones_md_failure_raw.txt").write_text(
+        raw_md, encoding="utf-8"
+    )
+    if normalized:
+        (failure_artifact_dir / "milestones_md_failure_after_normalize.txt").write_text(
+            normalized, encoding="utf-8"
+        )
+    if folded:
+        (failure_artifact_dir / "milestones_md_failure_after_write_file_fold.txt").write_text(
+            folded, encoding="utf-8"
+        )
+    if repaired:
+        (failure_artifact_dir / "milestones_md_failure_last_repaired.txt").write_text(
+            repaired, encoding="utf-8"
+        )
+
+
 def demo_bundle() -> VerticalSliceBundle:
     write_action = f"write_file examples/todo_cli.py | {_escape_write_body(TODO_CLI_DEMO)}"
     milestones = f"""# Milestones
@@ -142,7 +227,10 @@ def _artifact_rel(path: Path) -> str:
 
 
 def materialize_bundle(
-    bundle: VerticalSliceBundle, *, event_bus: object | None = None
+    bundle: VerticalSliceBundle,
+    *,
+    event_bus: object | None = None,
+    failure_artifact_dir: Path | None = None,
 ) -> None:
     bus = as_emitter(event_bus)
     Paths.ensure_project_structure()
@@ -150,6 +238,11 @@ def materialize_bundle(
     try:
         MilestoneService.parse_milestones(bundle.milestones_md)
     except ValueError as exc:
+        if failure_artifact_dir is not None:
+            failure_artifact_dir.mkdir(parents=True, exist_ok=True)
+            (
+                failure_artifact_dir / "milestones_md_materialize_parse_failure.txt"
+            ).write_text(bundle.milestones_md, encoding="utf-8")
         raise ValueError(
             f"Refusing to write docs/milestones.md: milestone markdown is invalid ({exc}). "
             "Fix milestones_md or re-run vertical-slice / LLM generation."
@@ -286,6 +379,7 @@ def finalize_llm_milestones_md(
     raw_md: str,
     *,
     source_context: str | None = None,
+    failure_artifact_dir: Path | None = None,
 ) -> tuple[str, list[str]]:
     """
     Normalize headers, repair common LLM omissions, parse, and validate product quality.
@@ -294,19 +388,42 @@ def finalize_llm_milestones_md(
     or not grounded in ``source_context`` (idea or vision text).
 
     Returns ``(milestones_md_to_persist, repair_warnings)``.
+
+    On parse or weak-plan failure, when ``failure_artifact_dir`` is set, writes
+    ``milestones_md_failure_raw.txt`` (and intermediate stages when available) for debugging.
     """
-    normalized, norm_warnings = normalize_milestone_markdown(raw_md)
-    repaired, repair_warnings = repair_llm_milestones_md(normalized)
-    all_warnings = [*norm_warnings, *repair_warnings]
+    normalized = ""
+    folded = ""
+    repaired = ""
     try:
+        normalized, norm_warnings = normalize_milestone_markdown(raw_md)
+        folded, fold_warnings = _repair_multiline_write_file_actions(normalized)
+        repaired, repair_warnings = repair_llm_milestones_md(folded)
+        all_warnings = [*norm_warnings, *fold_warnings, *repair_warnings]
         parsed = MilestoneService.parse_milestones(repaired)
     except ValueError as exc:
+        if failure_artifact_dir is not None:
+            _persist_milestone_md_failure_artifacts(
+                failure_artifact_dir,
+                raw_md=raw_md,
+                normalized=normalized,
+                folded=folded,
+                repaired=repaired,
+            )
         raise ValueError(
             f"{exc} See {MILESTONES_DOC_PATH} for the expected milestone shape; fix the "
             "markdown or re-run `forge vertical-slice` with a clearer idea/vision."
         ) from exc
     weak = weak_parsed_milestone_plan_messages(parsed, idea_context=source_context)
     if weak:
+        if failure_artifact_dir is not None:
+            _persist_milestone_md_failure_artifacts(
+                failure_artifact_dir,
+                raw_md=raw_md,
+                normalized=normalized,
+                folded=folded,
+                repaired=repaired,
+            )
         raise WeakMilestonePlanError(weak)
     return repaired, all_warnings
 
@@ -315,6 +432,7 @@ def canonical_milestones_md_from_llm_raw(
     raw_milestones_md: str,
     *,
     source_context: str | None,
+    failure_artifact_dir: Path | None = None,
 ) -> tuple[str, list[str]]:
     """
     Single entry point for turning raw LLM ``milestones_md`` JSON into the markdown that
@@ -516,6 +634,7 @@ def _llm_vertical_slice_bundle_loop(
                 canonical_milestones_md, _mw = canonical_milestones_md_from_llm_raw(
                     str(data["milestones_md"]),
                     source_context=source_context,
+                    failure_artifact_dir=bundle_llm_artifact_dir,
                 )
             except WeakMilestonePlanError as exc:
                 if _weak_attempt == 0:
@@ -653,7 +772,9 @@ def run_vertical_slice(
                 label="write vision, requirements, architecture, milestones (demo)",
             )
             bundle = demo_bundle()
-            materialize_bundle(bundle, event_bus=bus)
+            materialize_bundle(
+                bundle, event_bus=bus, failure_artifact_dir=llm_bundle_artifact_dir
+            )
             stages.append(
                 {
                     "stage": "materialize_docs",
@@ -774,7 +895,9 @@ def run_vertical_slice(
                 label="write vision, requirements, architecture, milestones",
             )
             try:
-                materialize_bundle(bundle, event_bus=bus)
+                materialize_bundle(
+                    bundle, event_bus=bus, failure_artifact_dir=llm_bundle_artifact_dir
+                )
             except OSError as exc:
                 msg = f"Failed to write docs: {exc}"
                 stages.append(

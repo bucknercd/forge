@@ -19,6 +19,7 @@ from forge.milestone_llm_quality import WeakMilestonePlanError
 from forge.vertical_slice import (
     MILESTONES_DOC_PATH,
     VerticalSliceBundle,
+    _repair_multiline_write_file_actions,
     canonical_milestones_md_from_llm_raw,
     demo_bundle,
     finalize_llm_milestones_md,
@@ -284,6 +285,87 @@ def test_finalize_llm_milestones_md_error_mentions_docs_path():
         assert "vertical-slice" in str(exc).lower()
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_repair_multiline_write_file_actions_collapses_to_escaped_newlines():
+    raw = """# Milestones
+
+## Milestone 1: T
+- **Objective**: Add parser.
+- **Scope**: src/
+- **Validation**: exists.
+
+- **Forge Actions**:
+  - write_file src/logcheck/parser.py | import os
+
+def parse_log(file_path):
+    pass
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains src/logcheck/parser.py import os
+"""
+    out, warnings = _repair_multiline_write_file_actions(raw)
+    assert any("Folded multiline" in w for w in warnings)
+    folded_line = next(ln for ln in out.splitlines() if "write_file src/logcheck/parser.py" in ln)
+    assert r"\n" in folded_line
+    assert "parse_log" in folded_line
+    assert "mark_milestone_completed" in out
+
+
+def test_finalize_llm_milestones_md_multiline_write_file_integration():
+    """Real LLM shape: body lines after ``|`` are separate lines; finalize → parse succeeds."""
+    raw = """# Milestones
+
+## Milestone 1: Parser module
+
+- **Objective**: Add src/logcheck/parser.py with a parse_log entrypoint.
+- **Scope**: Single module under src/logcheck/.
+- **Validation**: Module imports and defines parse_log.
+
+- **Forge Actions**:
+  - write_file src/logcheck/parser.py | import os
+
+def parse_log(file_path):
+    if not os.path.exists(file_path):
+        raise FileNotFoundError("missing")
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains src/logcheck/parser.py def parse_log
+"""
+    idea = "Build logcheck, a Python CLI for syslog analysis under src/logcheck/"
+    out, _warnings = finalize_llm_milestones_md(raw, source_context=idea)
+    m = MilestoneService.parse_milestones(out)
+    assert m[0].forge_actions[0].startswith("write_file src/logcheck/parser.py")
+    assert "def parse_log" in m[0].forge_actions[0]
+
+
+def test_finalize_llm_milestones_md_persists_raw_on_parse_failure(tmp_path):
+    bad = "# Milestones\n\n## Milestone One\n- **Objective**: x\n"
+    with pytest.raises(ValueError):
+        finalize_llm_milestones_md(bad, failure_artifact_dir=tmp_path)
+    assert (tmp_path / "milestones_md_failure_raw.txt").read_text(encoding="utf-8") == bad
+
+
+def test_finalize_llm_milestones_md_still_rejects_garbage():
+    with pytest.raises(ValueError):
+        finalize_llm_milestones_md("# not a milestone file\n", source_context="idea")
+
+
+def test_materialize_bundle_persists_milestones_md_on_parse_failure(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.ensure_project_structure()
+    bundle = VerticalSliceBundle(
+        vision="v",
+        requirements_md="# R\n",
+        architecture_md="# A\n",
+        milestones_md="# Milestones\n\n## Milestone One\n",
+    )
+    with pytest.raises(ValueError):
+        materialize_bundle(bundle, failure_artifact_dir=tmp_path)
+    art = tmp_path / "milestones_md_materialize_parse_failure.txt"
+    assert art.exists()
+    assert "Milestone One" in art.read_text(encoding="utf-8")
 
 
 def test_generate_bundle_from_llm_repairs_partial_milestone():
