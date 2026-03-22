@@ -14,6 +14,7 @@ from forge.planner_normalize import (
     normalize_llm_planner_action_line,
     persist_llm_planner_raw_on_failure,
 )
+from forge.vertical_slice_json import extract_vertical_slice_json_text
 
 
 class Planner:
@@ -52,11 +53,13 @@ class LLMPlanner(Planner):
     stable_for_recheck: bool = False
     fallback_to_milestone_actions: bool = True
     last_normalization_notes: list[str] = field(default_factory=list)
+    last_json_extraction_kind: str | None = None
 
     def build_plan(
         self, milestone: Milestone, *, repair_context: dict | None = None
     ) -> ExecutionPlan:
         self.last_normalization_notes = []
+        self.last_json_extraction_kind = None
         prompt = _build_llm_plan_prompt(milestone)
         if repair_context:
             from forge.task_feedback import repair_context_to_prompt_appendix
@@ -65,8 +68,19 @@ class LLMPlanner(Planner):
         raw = ""
         try:
             raw = self.llm_client.generate(prompt)
-            actions_raw = _parse_llm_actions(
-                raw,
+            try:
+                json_text, ext_kind = extract_vertical_slice_json_text(raw)
+            except ValueError as exc:
+                raise ValueError(f"LLM planner: JSON extraction failed: {exc}") from exc
+            self.last_json_extraction_kind = ext_kind
+            try:
+                parsed = json.loads(json_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"LLM planner: invalid JSON after {ext_kind} extraction: {exc}"
+                ) from exc
+            actions_raw = _parse_llm_actions_payload(
+                parsed,
                 fallback_actions=milestone.forge_actions if self.fallback_to_milestone_actions else None,
             )
             if not actions_raw:
@@ -87,11 +101,15 @@ class LLMPlanner(Planner):
                     raise ValueError(f"LLM planner action {idx} invalid: {exc}") from exc
             return ExecutionPlan(milestone_id=milestone.id, actions=actions)
         except ValueError as exc:
+            artifact_path = None
             if raw and str(raw).strip():
-                persist_llm_planner_raw_on_failure(
+                artifact_path = persist_llm_planner_raw_on_failure(
                     raw, milestone.id, reason=str(exc)
                 )
-            raise
+            msg = str(exc)
+            if artifact_path is not None:
+                msg = f"{msg} Raw planner output saved to: {artifact_path}"
+            raise ValueError(msg) from exc
 
     def metadata(self) -> dict:
         meta = {
@@ -102,6 +120,8 @@ class LLMPlanner(Planner):
         }
         if self.last_normalization_notes:
             meta["normalization_notes"] = self.last_normalization_notes
+        if self.last_json_extraction_kind:
+            meta["json_extraction_kind"] = self.last_json_extraction_kind
         return meta
 
 
@@ -136,7 +156,8 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
         "Do NOT write 'append_section requirements | ...' — that is invalid. "
         "The <Section Heading> is a short title (e.g. Overview), not the whole section body.\n"
         "- Prefer write_file / bounded file edits for code; use append_section only for doc sections.\n"
-        "  write_file <rel_path> | <body with \\\\n for newlines>\n"
+        "  write_file <rel_path> | <body with \\\\n for newlines> "
+        "(body may contain the substring ' | ' — only the delimiter after <rel_path> splits path vs body)\n"
         "  insert_after_in_file <rel_path> | anchor @@FORGE@@ insertion\n"
         "  insert_before_in_file <rel_path> | anchor @@FORGE@@ insertion\n"
         "  replace_text_in_file <rel_path> | old_text @@FORGE@@ new_text\n"
@@ -162,11 +183,7 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
     )
 
 
-def _parse_llm_actions(raw: str, fallback_actions: list[str] | None) -> list[str]:
-    try:
-        parsed = json.loads(raw)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"LLM planner returned invalid JSON: {exc}") from exc
+def _parse_llm_actions_payload(parsed: dict, fallback_actions: list[str] | None) -> list[str]:
     if not isinstance(parsed, dict):
         raise ValueError("LLM planner output must be a JSON object.")
     actions_raw = parsed.get("actions")

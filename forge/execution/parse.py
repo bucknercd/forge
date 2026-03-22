@@ -28,6 +28,11 @@ from forge.execution.validation_rules import (
 
 TARGETS = frozenset({"requirements", "architecture", "decisions", "milestones"})
 
+# ``write_file <rel_path> | <body>`` — delimiter is ONLY after the path token (not the first
+# `` | `` in the line). Bodies may contain `` | `` (e.g. Python ``a | b``); splitting the
+# whole line on the first `` | `` would truncate the payload.
+_WRITE_FILE_ACTION_RE = re.compile(r"^write_file\s+(\S+)\s+\|\s(.*)$", re.DOTALL)
+
 # Separates parts inside the right-hand side of `cmd path | ...` for bounded file edits.
 FORGE_BOUNDED_EDIT_SEP = " @@FORGE@@ "
 
@@ -72,25 +77,18 @@ def parse_forge_action_line(
 
     first = line.split(None, 1)[0].lower()
     if first == "write_file":
-        if " | " not in line:
+        m = _WRITE_FILE_ACTION_RE.match(line)
+        if not m:
             raise ValueError(
                 _fmt_diag(
                     "forge action",
-                    f"write_file expects: write_file <rel_path> | <body>: {raw!r}",
+                    f"write_file expects: write_file <rel_path> | <body> "
+                    f"(path must be a single token; body may contain ' | '): {raw!r}",
                     line_no,
                 )
             )
-        left, body = line.split(" | ", 1)
-        lparts = left.split(None, 1)
-        if len(lparts) < 2:
-            raise ValueError(
-                _fmt_diag(
-                    "forge action",
-                    f"write_file missing relative path: {raw!r}",
-                    line_no,
-                )
-            )
-        rel_path = lparts[1].strip()
+        rel_path = m.group(1).strip()
+        body = m.group(2)
         if not rel_path:
             raise ValueError(
                 _fmt_diag("forge action", f"write_file empty path: {raw!r}", line_no)
