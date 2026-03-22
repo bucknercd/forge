@@ -21,7 +21,10 @@ def test_stub_client_path_via_resolve():
     assert "summary" in json.loads(raw)
 
 
-def test_resolve_openai_missing_credentials():
+def test_resolve_openai_missing_credentials(monkeypatch):
+    # Must not depend on developer machine env (keys often set globally).
+    monkeypatch.delenv("FORGE_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     policy = PlannerPolicy(mode="llm", llm_client="openai", llm_model="gpt-4o-mini")
     client, err = resolve_llm_client_from_policy(policy)
     assert client is None
