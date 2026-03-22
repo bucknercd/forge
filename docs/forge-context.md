@@ -217,7 +217,7 @@ Current file creation/edit support includes:
 See README Quick Start (vertical slice) for usage and expected behavior.
 
 #### Tasks (two-layer planning)
-- Task breakdowns live in **`.system/tasks/m<id>.json`**; `forge task-expand` seeds a **compatibility task** (copies milestone Forge Actions/Validation) unless tasks already exist.
+- Task breakdowns live in **`.system/tasks/m<id>.json`**. **`forge task-expand`** writes **2–6 ordered tasks** via deterministic splitting of Forge Actions when possible (`mark_milestone_completed` + validation on the last task); optional LLM JSON expansion applies when a non-stub OpenAI client is configured and output validates. Otherwise it falls back to a **single compatibility task**. Existing files are left unchanged unless **`--force`** is set.
 - **`forge milestone-preview <id> --task <n>`** builds/saves reviewed plans from a task; plan ids **`m<id>-t<n>-<hash>`**; apply still uses **`milestone-apply-plan`** + gates (no review bypass).
 - Milestones may include optional **`- **Summary**:`** in `docs/milestones.md` for short roadmap text.
 

@@ -248,7 +248,7 @@ class ForgeCLI:
 
     @staticmethod
     def task_expand(milestone_id: int, *, force: bool = False, json_mode: bool = False) -> bool:
-        """Expand milestone into tasks JSON (compatibility task by default)."""
+        """Expand milestone into tasks JSON (multi-task heuristic; compat fallback)."""
         r = expand_milestone_to_tasks(milestone_id=milestone_id, force=force)
         if json_mode:
             print(json.dumps(r, indent=2, sort_keys=True))
@@ -270,13 +270,15 @@ class ForgeCLI:
             return
         print(f"Tasks for milestone {milestone_id}:")
         for t in tasks:
-            deps = f" | depends_on={t.depends_on}" if t.depends_on else ""
-            vshort = t.validation.replace("\n", " ")
-            if len(vshort) > 72:
-                vshort = vshort[:69] + "..."
-            print(f"  {t.id}. {t.title}{deps}")
-            print(f"      objective: {t.objective[:100]}{'…' if len(t.objective) > 100 else ''}")
-            print(f"      validation: {vshort or '—'}")
+            deps_s = (
+                ", ".join(str(d) for d in t.depends_on) if t.depends_on else "—"
+            )
+            obj = t.objective.replace("\n", " ")
+            if len(obj) > 100:
+                obj = obj[:97] + "…"
+            print(f"  [{t.id}] {t.title}")
+            print(f"      objective: {obj or '—'}")
+            print(f"      depends_on: {deps_s}")
 
     @staticmethod
     def task_show(milestone_id: int, task_id: int, json_mode: bool = False) -> None:
