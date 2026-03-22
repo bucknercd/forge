@@ -1353,6 +1353,7 @@ class ForgeCLI:
             gate_test_timeout_seconds=gate_test_timeout_seconds,
             gate_test_output_max_chars=gate_test_output_max_chars,
             event_bus=bus,
+            llm_bundle_artifact_dir=run_dir,
         )
         payload["run_id"] = run_id
         payload["run_log_dir"] = str(run_dir)

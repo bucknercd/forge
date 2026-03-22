@@ -5,8 +5,8 @@ then run preview → save reviewed plan → apply → gates.
 
 from __future__ import annotations
 
-import json
 import re
+from typing import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +39,12 @@ from forge.milestone_llm_quality import (
     WeakMilestonePlanError,
     normalize_milestone_markdown,
     weak_parsed_milestone_plan_messages,
+)
+from forge.vertical_slice_json import (
+    STRICT_JSON_RETRY_SUFFIX,
+    VerticalSliceLlmJsonError,
+    parse_vertical_slice_bundle_dict,
+    write_llm_bundle_raw_artifact,
 )
 from forge.vision import VisionManager
 
@@ -458,77 +464,119 @@ def _review_enforcement_status(
     }
 
 
-def _parse_vertical_slice_json(
-    raw: str, *, required_keys: tuple[str, ...]
-) -> dict[str, object]:
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"LLM returned invalid JSON for vertical slice: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("LLM vertical slice JSON must be an object.")
-    missing = [k for k in required_keys if k not in data]
-    if missing:
-        raise ValueError(f"LLM JSON missing keys: {missing}")
-    return data
+def _llm_vertical_slice_bundle_loop(
+    *,
+    client: LLMClient,
+    bundle_llm_artifact_dir: Path | None,
+    source_context: str | None,
+    required_keys: tuple[str, ...],
+    make_prompt: Callable[[str, str], str],
+    build_bundle: Callable[[dict[str, object], str], VerticalSliceBundle],
+) -> VerticalSliceBundle:
+    """
+    Weak-plan retry (outer) × JSON parse retry (inner).
 
+    Each LLM response is optionally written to ``bundle_llm_artifact_dir`` as
+    ``llm_bundle_raw_NN.txt`` (monotonic ``NN`` across the whole loop).
+    """
+    weak_extra = ""
+    seq = 0
+    recent_paths: list[str] = []
 
-def generate_bundle_from_llm(idea: str, client: LLMClient) -> VerticalSliceBundle:
-    extra = ""
-    for attempt in range(2):
-        raw = client.generate(_build_idea_prompt(idea) + extra)
-        data = _parse_vertical_slice_json(
-            raw, required_keys=("vision", "requirements_md", "architecture_md", "milestones_md")
-        )
-        try:
-            canonical_milestones_md, _mw = canonical_milestones_md_from_llm_raw(
-                str(data["milestones_md"]),
-                source_context=idea,
+    for _weak_attempt in range(2):
+        json_strict = ""
+        for json_attempt in range(2):
+            prompt = make_prompt(weak_extra, json_strict)
+            raw = client.generate(prompt)
+            seq += 1
+            apath = write_llm_bundle_raw_artifact(
+                bundle_llm_artifact_dir, sequence=seq, raw=raw
             )
-        except WeakMilestonePlanError as exc:
-            if attempt == 0:
-                extra = _milestone_regeneration_suffix(exc.messages)
-                continue
-            raise
-        return VerticalSliceBundle(
+            if apath is not None:
+                recent_paths.append(str(apath))
+
+            try:
+                data, _jtxt, _kind = parse_vertical_slice_bundle_dict(
+                    raw, required_keys=required_keys
+                )
+            except ValueError as exc:
+                if json_attempt == 0:
+                    json_strict = STRICT_JSON_RETRY_SUFFIX
+                    continue
+                tail = recent_paths[-2:] if len(recent_paths) >= 2 else recent_paths
+                msg = (
+                    f"{exc} "
+                    f"Vertical-slice bundle JSON failed after 2 attempts (extraction + parse). "
+                    f"Inspect raw model output: {'; '.join(tail)}"
+                )
+                raise VerticalSliceLlmJsonError(msg, artifact_paths=tail) from exc
+
+            json_strict = ""
+            try:
+                canonical_milestones_md, _mw = canonical_milestones_md_from_llm_raw(
+                    str(data["milestones_md"]),
+                    source_context=source_context,
+                )
+            except WeakMilestonePlanError as exc:
+                if _weak_attempt == 0:
+                    weak_extra = _milestone_regeneration_suffix(exc.messages)
+                    break
+                raise
+            return build_bundle(data, canonical_milestones_md)
+    raise RuntimeError("_llm_vertical_slice_bundle_loop: exhausted without return")
+
+
+def generate_bundle_from_llm(
+    idea: str,
+    client: LLMClient,
+    *,
+    bundle_llm_artifact_dir: Path | None = None,
+) -> VerticalSliceBundle:
+    return _llm_vertical_slice_bundle_loop(
+        client=client,
+        bundle_llm_artifact_dir=bundle_llm_artifact_dir,
+        source_context=idea,
+        required_keys=(
+            "vision",
+            "requirements_md",
+            "architecture_md",
+            "milestones_md",
+        ),
+        make_prompt=lambda weak, jstrict: _build_idea_prompt(idea) + weak + jstrict,
+        build_bundle=lambda data, canon: VerticalSliceBundle(
             vision=str(data["vision"]),
             requirements_md=str(data["requirements_md"]),
             architecture_md=str(data["architecture_md"]),
-            milestones_md=canonical_milestones_md,
-        )
-    raise RuntimeError("generate_bundle_from_llm: retry loop exhausted unexpectedly")
+            milestones_md=canon,
+        ),
+    )
 
 
-def generate_bundle_from_llm_fixed_vision(vision_text: str, client: LLMClient) -> VerticalSliceBundle:
+def generate_bundle_from_llm_fixed_vision(
+    vision_text: str,
+    client: LLMClient,
+    *,
+    bundle_llm_artifact_dir: Path | None = None,
+) -> VerticalSliceBundle:
     """
     LLM generates requirements, architecture, and milestones only; ``vision_text`` is
     the source of truth and is not regenerated by the model.
     """
     ctx = vision_text.strip()
-    extra = ""
-    for attempt in range(2):
-        raw = client.generate(_build_fixed_vision_prompt(vision_text) + extra)
-        data = _parse_vertical_slice_json(
-            raw, required_keys=("requirements_md", "architecture_md", "milestones_md")
-        )
-        try:
-            canonical_milestones_md, _mw = canonical_milestones_md_from_llm_raw(
-                str(data["milestones_md"]),
-                source_context=ctx,
-            )
-        except WeakMilestonePlanError as exc:
-            if attempt == 0:
-                extra = _milestone_regeneration_suffix(exc.messages)
-                continue
-            raise
-        return VerticalSliceBundle(
+    return _llm_vertical_slice_bundle_loop(
+        client=client,
+        bundle_llm_artifact_dir=bundle_llm_artifact_dir,
+        source_context=ctx,
+        required_keys=("requirements_md", "architecture_md", "milestones_md"),
+        make_prompt=lambda weak, jstrict: _build_fixed_vision_prompt(vision_text)
+        + weak
+        + jstrict,
+        build_bundle=lambda data, canon: VerticalSliceBundle(
             vision=ctx,
             requirements_md=str(data["requirements_md"]),
             architecture_md=str(data["architecture_md"]),
-            milestones_md=canonical_milestones_md,
-        )
-    raise RuntimeError(
-        "generate_bundle_from_llm_fixed_vision: retry loop exhausted unexpectedly"
+            milestones_md=canon,
+        ),
     )
 
 
@@ -568,6 +616,7 @@ def run_vertical_slice(
     gate_test_timeout_seconds: int | None,
     gate_test_output_max_chars: int | None,
     event_bus: object | None = None,
+    llm_bundle_artifact_dir: Path | None = None,
 ) -> dict:
     """
     Run materialize → save reviewed plan → apply with gates.
@@ -650,9 +699,43 @@ def run_vertical_slice(
             )
             try:
                 if fixed_vision is not None:
-                    bundle = generate_bundle_from_llm_fixed_vision(fixed_vision, client)
+                    bundle = generate_bundle_from_llm_fixed_vision(
+                        fixed_vision,
+                        client,
+                        bundle_llm_artifact_dir=llm_bundle_artifact_dir,
+                    )
                 else:
-                    bundle = generate_bundle_from_llm(idea, client)
+                    bundle = generate_bundle_from_llm(
+                        idea,
+                        client,
+                        bundle_llm_artifact_dir=llm_bundle_artifact_dir,
+                    )
+            except VerticalSliceLlmJsonError as exc:
+                msg = str(exc)
+                paths = list(exc.artifact_paths)
+                stages.append(
+                    {
+                        "stage": "llm_generation",
+                        "ok": False,
+                        "mode": doc_mode,
+                        "message": msg,
+                        "llm_bundle_raw_paths": paths,
+                        "json_parse_failed": True,
+                        "json_attempts": 2,
+                    }
+                )
+                bus.emit(
+                    PHASE_COMPLETED,
+                    phase="llm_generation",
+                    ok=False,
+                    message=msg,
+                    llm_bundle_raw_paths=paths,
+                    json_parse_failed=True,
+                    json_attempts=2,
+                )
+                bus.emit(RUN_FAILED, reason=msg, phase="llm_generation")
+                bus.emit(RUN_COMPLETED, ok=False)
+                return _finalize(stages, ok=False)
             except WeakMilestonePlanError as exc:
                 msg = (
                     "Weak milestone plan (bootstrap-only, not grounded in the idea/vision, "

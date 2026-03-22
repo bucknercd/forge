@@ -76,6 +76,11 @@ class CliProgressHandler:
             ok = data.get("ok", True)
             status = "ok" if ok else "failed"
             self._p(f"  ✓ {phase} ({status})")
+            if not ok and data.get("llm_bundle_raw_paths"):
+                self._p(
+                    "    raw LLM responses saved: "
+                    + "; ".join(str(p) for p in data["llm_bundle_raw_paths"])
+                )
             if not ok and data.get("message"):
                 self._p(f"    {data['message']}")
             elif self._verbose and ok and data.get("message"):

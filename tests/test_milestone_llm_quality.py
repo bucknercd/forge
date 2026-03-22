@@ -202,7 +202,7 @@ def test_run_vertical_slice_surfaces_weak_plan_on_llm_path(tmp_path, monkeypatch
         encoding="utf-8",
     )
 
-    def _raise_weak(_vision, _client):
+    def _raise_weak(_vision, _client, *, bundle_llm_artifact_dir=None):
         raise WeakMilestonePlanError(
             [
                 "Milestone 1 uses FORGE_INIT_MARKER (template/bootstrap only); "
