@@ -186,7 +186,7 @@ Optional trailing segment: ` | occurrence=2 must_be_unique=false line_match=true
 
 **Specs (`docs/`)** are the source of truth: vision, requirements, architecture, decisions, and milestones. You can author them by hand, or let **`forge vertical-slice`** (with LLM) populate them from an idea or a vision file.
 
-**Milestones** live in `docs/milestones.md` as Markdown sections. Each milestone has narrative fields (objective, scope, validation) plus machine-readable lines:
+**Milestones** live in `docs/milestones.md` as Markdown sections. Each milestone has narrative fields (objective, scope, validation), optional **`- **Summary**:`** for a short high-level blurb, plus machine-readable lines:
 
 - **Forge Actions** — declarative edits (`write_file`, `append_section`, bounded patches, …) that the executor applies in order.
 - **Forge Validation** — checks (`path_file_contains`, `file_contains`, …) that must pass after apply.
@@ -194,6 +194,19 @@ Optional trailing segment: ` | occurrence=2 must_be_unique=false line_match=true
 The **planner** (deterministic or LLM-backed, per `forge-policy.json`) reads the milestone and produces a concrete **plan**. Important plans are **reviewed and saved** before apply so execution is traceable.
 
 **Execution** is deterministic: Forge does what the saved plan says, then runs **gates**. Failure stops the run with a clear reason; you fix specs, milestones, or code and try again—there is no hidden auto-retry in the engine itself (orchestration like `workflow-guarded` can combine multiple steps).
+
+### Milestones vs tasks (two-layer planning)
+
+Forge can treat a milestone as the **roadmap unit** and **tasks** as finer execution slices stored as JSON under **`.system/tasks/m<milestone_id>.json`** (easy to diff and edit).
+
+- **`forge task-expand --milestone <id>`** — creates tasks from the current milestone. By default this adds **one compatibility task** that copies the milestone’s Forge Actions / Forge Validation so existing workflows keep working.
+- **`forge task-list --milestone <id>`** / **`forge task-show --milestone <id> --task <n>`** — inspect tasks.
+- **`forge milestone-preview <id> --task <n>`** — preview a plan built from that task (same planner rules as milestone preview).
+- **`forge milestone-preview <id> --task <n> --save-plan`** — save a reviewed plan; plan ids look like **`m<id>-t<task>-<hash>`**. Apply with **`forge milestone-apply-plan <plan_id>`** (unchanged command; no bypass of review or gates).
+
+**Compatibility:** If you never run `task-expand`, behavior stays **milestone-only** (`milestone-preview` / `milestone-apply-plan` as today). After `task-expand`, prefer **task-scoped** preview/save for execution-level review; milestone-level preview still reflects the full `docs/milestones.md` block.
+
+**Note:** Post-apply **milestone_validation** still reads **Forge Validation** from `docs/milestones.md` for that milestone id. Keep milestone-level checks accurate, or mirror them in each task’s `forge_validation` when you split work.
 
 ---
 
@@ -230,6 +243,23 @@ forge milestone-preview 1                  # optional: milestone id
 forge milestone-preview 1 --save-plan      # persist reviewed plan
 forge milestone-apply-plan <plan_id>       # apply saved plan + gates
 forge execute-next
+```
+
+**Tasks (optional, under a milestone)**
+
+```bash
+forge task-expand --milestone 1            # default: 1 compatibility task
+forge task-list --milestone 1
+forge task-show --milestone 1 --task 1
+forge milestone-preview 1 --task 1
+forge milestone-preview 1 --task 1 --save-plan
+forge milestone-apply-plan m1-t1-<hash12>
+```
+
+**Milestone generation (LLM)** — same as `milestone-synthesize`:
+
+```bash
+forge milestone-generate --count 3
 ```
 
 ---

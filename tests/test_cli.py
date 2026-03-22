@@ -45,15 +45,34 @@ def test_init_creates_system_dir_and_baseline_files(tmp_path, capsys):
     assert "# Decisions" in Paths.DECISIONS_FILE.read_text(encoding="utf-8")
     assert "# Milestones" in Paths.MILESTONES_FILE.read_text(encoding="utf-8")
 
+def _minimal_milestones_md() -> str:
+    return """# Milestones
+
+## Milestone 1: One
+- **Objective**: O1
+- **Scope**: S1
+- **Validation**: V1
+
+## Milestone 2: Two
+- **Objective**: O2
+- **Scope**: S2
+- **Validation**: V2
+"""
+
+
 def test_milestone_list(tmp_path):
+    Paths.refresh(tmp_path)
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    Paths.MILESTONES_FILE.write_text("## Milestone 1\nDetails\n## Milestone 2\nDetails")
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.MILESTONES_FILE.write_text(_minimal_milestones_md(), encoding="utf-8")
 
     ForgeCLI.milestone_list()
 
 def test_milestone_show(tmp_path):
+    Paths.refresh(tmp_path)
     Paths.MILESTONES_FILE = tmp_path / "milestones.md"
-    Paths.MILESTONES_FILE.write_text("## Milestone 1\nDetails\n## Milestone 2\nDetails")
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.MILESTONES_FILE.write_text(_minimal_milestones_md(), encoding="utf-8")
 
     ForgeCLI.milestone_show(1)
 

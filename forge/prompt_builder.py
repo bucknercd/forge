@@ -18,8 +18,13 @@ def build_execution_prompt(milestone: Milestone, attempt: int) -> str:
         f"Attempt: {attempt}\n"
         f"Objective: {milestone.objective}\n"
         f"Scope: {milestone.scope}\n"
-        f"Validation: {milestone.validation}\n\n"
-        "Forge constraints:\n"
+        f"Validation: {milestone.validation}\n"
+        + (
+            f"Summary: {milestone.summary}\n\n"
+            if (milestone.summary or "").strip()
+            else "\n"
+        )
+        + "Forge constraints:\n"
         f"{constraints_text}\n\n"
         "Return ONLY valid JSON with at least: {\"summary\": \"...\"}."
     )
@@ -44,8 +49,13 @@ def build_retry_prompt(
         f"Attempt: {attempt}\n"
         f"Objective: {milestone.objective}\n"
         f"Scope: {milestone.scope}\n"
-        f"Validation: {milestone.validation}\n\n"
-        f"{failure_section}"
+        f"Validation: {milestone.validation}\n"
+        + (
+            f"Summary: {milestone.summary}\n\n"
+            if (milestone.summary or "").strip()
+            else "\n"
+        )
+        + f"{failure_section}"
         "Fix only what is necessary to satisfy the validation rules.\n"
         "Return ONLY valid JSON with at least: {\"summary\": \"...\"}."
     )

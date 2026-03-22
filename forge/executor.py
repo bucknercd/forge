@@ -27,6 +27,7 @@ from forge.reviewed_plan import (
     save_reviewed_plan,
     validate_reviewed_plan,
 )
+from forge.task_service import get_task, task_to_execution_milestone
 
 MAX_RETRIES = 2
 
@@ -158,17 +159,37 @@ class Executor:
 
     @staticmethod
     def preview_milestone(
-        milestone_id: int, planner: Planner | None = None
+        milestone_id: int,
+        planner: Planner | None = None,
+        *,
+        task_id: int | None = None,
     ) -> dict:
         """
         Build and simulate a milestone execution plan without side effects.
+
+        When ``task_id`` is set, the plan is built from the task breakdown under
+        ``.system/tasks/m<milestone_id>.json`` (parent milestone id is still used
+        for ``mark_milestone_completed`` targets).
         """
         try:
-            milestone = MilestoneService.get_milestone(milestone_id)
+            parent = MilestoneService.get_milestone(milestone_id)
         except ValueError as exc:
             return {"ok": False, "message": f"Milestone definition error: {exc}"}
-        if not milestone:
+        if not parent:
             return {"ok": False, "message": "Invalid milestone ID."}
+
+        if task_id is not None:
+            task = get_task(milestone_id, task_id)
+            if not task:
+                return {
+                    "ok": False,
+                    "message": f"Unknown task {task_id} for milestone {milestone_id}. "
+                    f"Run `forge task-expand --milestone {milestone_id}` first.",
+                    "milestone_id": milestone_id,
+                }
+            milestone = task_to_execution_milestone(parent, task)
+        else:
+            milestone = parent
 
         planner = planner or DeterministicPlanner()
         try:
@@ -177,11 +198,14 @@ class Executor:
         except ValueError as exc:
             return {"ok": False, "message": str(exc), "milestone_id": milestone_id}
 
+        if task_id is not None:
+            plan.task_id = task_id
+
         planner_meta = planner.metadata()
         warnings = _planner_warnings(planner_meta, plan)
         applier = ArtifactActionApplier(Paths)
         preview = applier.apply(plan, milestone, dry_run=True)
-        return {
+        out: dict = {
             "ok": len(preview.errors) == 0,
             "milestone_id": milestone.id,
             "title": milestone.title,
@@ -194,6 +218,9 @@ class Executor:
             "errors": preview.errors,
             "warnings": warnings,
         }
+        if task_id is not None:
+            out["task_id"] = task_id
+        return out
 
     @staticmethod
     def save_reviewed_plan_for_milestone(
@@ -229,6 +256,53 @@ class Executor:
                 plan_id=payload["plan_id"],
                 milestone_id=milestone_id,
                 plan_file=str(plan_path),
+            )
+            return preview
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "message": f"Failed to save reviewed plan: {exc}"}
+
+    @staticmethod
+    def save_reviewed_plan_for_task(
+        milestone_id: int,
+        task_id: int,
+        planner: Planner | None = None,
+        review_enforcement: dict | None = None,
+        event_bus: object | None = None,
+    ) -> dict:
+        """Preview/save a reviewed plan built from a task under ``milestone_id``."""
+        planner = planner or DeterministicPlanner()
+        preview = Executor.preview_milestone(
+            milestone_id, planner=planner, task_id=task_id
+        )
+        if not preview.get("ok"):
+            return preview
+        try:
+            parent = MilestoneService.get_milestone(milestone_id)
+            if not parent:
+                return {"ok": False, "message": "Invalid milestone ID."}
+            plan = ExecutionPlan.from_serializable(preview["execution_plan"])
+            payload = save_reviewed_plan(
+                milestone_id,
+                parent.title,
+                plan,
+                planner_mode=planner.mode,
+                planner_metadata=preview.get("planner_metadata", planner.metadata()),
+                warnings=preview.get("warnings", []),
+                review_enforcement=review_enforcement,
+                task_id=task_id,
+            )
+            preview["plan_id"] = payload["plan_id"]
+            plan_path = Paths.SYSTEM_DIR / "reviewed_plans" / f"{payload['plan_id']}.json"
+            preview["plan_file"] = str(plan_path)
+            preview["review_enforcement"] = payload.get(
+                "review_enforcement", review_enforcement or {}
+            )
+            as_emitter(event_bus).emit(
+                PLAN_SAVED,
+                plan_id=payload["plan_id"],
+                milestone_id=milestone_id,
+                plan_file=str(plan_path),
+                task_id=task_id,
             )
             return preview
         except Exception as exc:  # noqa: BLE001
@@ -291,14 +365,32 @@ class Executor:
         if not milestone:
             return {"ok": False, "message": "Milestone for reviewed plan no longer exists."}
 
+        raw_task_id = payload.get("task_id")
+        task_id: int | None = int(raw_task_id) if raw_task_id is not None else None
+
         try:
             planner_mode = payload.get("planner_mode", "deterministic")
+            apply_milestone = milestone
+            if task_id is not None:
+                task = get_task(milestone_id, task_id)
+                if not task:
+                    return {
+                        "ok": False,
+                        "message": (
+                            f"Task {task_id} no longer exists for milestone {milestone_id}."
+                        ),
+                        "plan_id": plan_id,
+                        "milestone_id": milestone_id,
+                    }
+                apply_milestone = task_to_execution_milestone(milestone, task)
             if planner_mode == "deterministic":
-                current_plan = DeterministicPlanner().build_plan(milestone)
+                current_plan = DeterministicPlanner().build_plan(apply_milestone)
             else:
                 # For non-deterministic planners, compare against reviewed plan
                 # and rely on existing milestone/target hash stale checks.
                 current_plan = ExecutionPlan.from_serializable(payload["plan"])
+            if task_id is not None:
+                current_plan.task_id = task_id
         except ValueError as exc:
             return {"ok": False, "message": f"Current milestone plan invalid: {exc}"}
 
@@ -310,7 +402,7 @@ class Executor:
         applier = ArtifactActionApplier(Paths)
         bus.emit(PHASE_STARTED, phase="apply", label="execute reviewed plan")
         apply_result = applier.apply(
-            reviewed_plan, milestone, dry_run=False, event_bus=bus
+            reviewed_plan, apply_milestone, dry_run=False, event_bus=bus
         )
         apply_ok = len(apply_result.errors) == 0
         bus.emit(
@@ -330,7 +422,7 @@ class Executor:
         milestone_result_file = result_dir / f"milestone_{milestone_id}.json"
         milestone_result_payload = {
             "id": milestone_id,
-            "title": milestone.title,
+            "title": apply_milestone.title,
             "summary": _build_execution_summary(len(reviewed_plan.actions), apply_result),
             "artifact_summary": apply_result.human_summary(),
             "files_changed": apply_result.normalized_files_changed(),
@@ -338,6 +430,8 @@ class Executor:
             "execution_plan": reviewed_plan.to_serializable(),
             "apply_errors": apply_result.errors,
         }
+        if task_id is not None:
+            milestone_result_payload["task_id"] = task_id
         with milestone_result_file.open("w", encoding="utf-8") as file:
             json.dump(milestone_result_payload, file, indent=4)
         run_any_gate = bool(run_validation_gate or test_command)
@@ -367,7 +461,8 @@ class Executor:
             "kind": "reviewed_plan_apply",
             "plan_id": plan_id,
             "milestone_id": milestone_id,
-            "title": milestone.title,
+            "task_id": task_id,
+            "title": apply_milestone.title,
             "planner_mode": payload.get("planner_mode", "deterministic"),
             "planner_metadata": payload.get("planner_metadata", {}),
             "review_enforcement": payload.get("review_enforcement", {}),
@@ -408,13 +503,13 @@ class Executor:
             artifact_summary=f"{artifact_summary}; gates: {gate_summary}",
         )
 
-        return {
+        ret = {
             "ok": ok_final,
             "apply_ok": apply_ok,
             "gates_ok": gates_ok,
             "plan_id": plan_id,
             "milestone_id": milestone_id,
-            "title": milestone.title,
+            "title": apply_milestone.title,
             "planner_mode": payload.get("planner_mode", "deterministic"),
             "planner_metadata": payload.get("planner_metadata", {}),
             "review_enforcement": payload.get("review_enforcement", {}),
@@ -434,6 +529,9 @@ class Executor:
             "result_artifact": str(reviewed_result_file),
             "message": "" if ok_final else (err or "Reviewed plan apply failed."),
         }
+        if task_id is not None:
+            ret["task_id"] = task_id
+        return ret
 
     @staticmethod
     def _execute_milestone_internal(milestone_id: int) -> None:

@@ -17,6 +17,7 @@ from forge.execution.models import (
 )
 from forge.execution.safe_paths import resolve_safe_project_path
 from forge.paths import Paths
+from forge.task_service import tasks_file_for_milestone
 
 
 def _sha256_text(text: str) -> str:
@@ -90,10 +91,14 @@ def save_reviewed_plan(
     planner_metadata: dict[str, Any] | None = None,
     warnings: list[str] | None = None,
     review_enforcement: dict[str, Any] | None = None,
+    task_id: int | None = None,
 ) -> dict[str, Any]:
     reviewed_plan_dir().mkdir(parents=True, exist_ok=True)
     p_hash = plan_hash(plan)
-    plan_id = f"m{milestone_id}-{p_hash[:12]}"
+    if task_id is not None:
+        plan_id = f"m{milestone_id}-t{task_id}-{p_hash[:12]}"
+    else:
+        plan_id = f"m{milestone_id}-{p_hash[:12]}"
     targets = target_paths_for_plan(plan)
     targets_meta = [
         {
@@ -103,7 +108,7 @@ def save_reviewed_plan(
         }
         for p in targets
     ]
-    payload = {
+    payload: dict[str, Any] = {
         "plan_id": plan_id,
         "milestone_id": milestone_id,
         "milestone_title": milestone_title,
@@ -117,6 +122,9 @@ def save_reviewed_plan(
         "targets": targets_meta,
         "plan": plan.to_serializable(),
     }
+    if task_id is not None:
+        payload["task_id"] = task_id
+        payload["tasks_file_hash"] = _file_hash(tasks_file_for_milestone(milestone_id))
     (reviewed_plan_dir() / f"{plan_id}.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -134,10 +142,23 @@ def validate_reviewed_plan(payload: dict[str, Any], current_plan: ExecutionPlan)
     expected = payload.get("plan_hash", "")
     current_hash = plan_hash(current_plan)
     if expected != current_hash:
-        return False, "Reviewed plan no longer matches current milestone definition."
+        hint = (
+            "task breakdown"
+            if payload.get("task_id") is not None
+            else "current milestone definition"
+        )
+        return False, f"Reviewed plan no longer matches {hint}."
     stored_milestones_hash = payload.get("milestones_file_hash", "")
     if stored_milestones_hash != _file_hash(Paths.MILESTONES_FILE):
         return False, "Milestones file changed since plan review (stale reviewed plan)."
+    if payload.get("task_id") is not None:
+        mid = int(payload["milestone_id"])
+        tf = tasks_file_for_milestone(mid)
+        if _file_hash(tf) != payload.get("tasks_file_hash", ""):
+            return (
+                False,
+                "Task breakdown (.system/tasks/) changed since plan review (stale reviewed plan).",
+            )
     for t in payload.get("targets", []):
         p = Path(t["path"])
         if _file_hash(p) != t.get("hash"):

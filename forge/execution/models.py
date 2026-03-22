@@ -127,6 +127,9 @@ ForgeAction = Union[
 class ExecutionPlan:
     milestone_id: int
     actions: list[ForgeAction] = field(default_factory=list)
+    """When set, this plan was built from a task under :attr:`milestone_id` (parent milestone)."""
+
+    task_id: int | None = None
 
     def to_serializable(self) -> dict[str, Any]:
         out: list[dict[str, Any]] = []
@@ -228,11 +231,16 @@ class ExecutionPlan:
                         "replacement": a.replacement,
                     }
                 )
-        return {"milestone_id": self.milestone_id, "actions": out}
+        body: dict[str, Any] = {"milestone_id": self.milestone_id, "actions": out}
+        if self.task_id is not None:
+            body["task_id"] = self.task_id
+        return body
 
     @staticmethod
     def from_serializable(data: dict[str, Any]) -> "ExecutionPlan":
         milestone_id = int(data.get("milestone_id"))
+        raw_tid = data.get("task_id")
+        task_id = int(raw_tid) if raw_tid is not None else None
         actions_raw = data.get("actions", [])
         actions: list[ForgeAction] = []
         for item in actions_raw:
@@ -324,7 +332,7 @@ class ExecutionPlan:
                 )
             else:
                 raise ValueError(f"Unknown action type in stored plan: {t!r}")
-        return ExecutionPlan(milestone_id=milestone_id, actions=actions)
+        return ExecutionPlan(milestone_id=milestone_id, actions=actions, task_id=task_id)
 
 
 @dataclass

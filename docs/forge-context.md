@@ -216,6 +216,11 @@ Current file creation/edit support includes:
 
 See README Quick Start (vertical slice) for usage and expected behavior.
 
+#### Tasks (two-layer planning)
+- Task breakdowns live in **`.system/tasks/m<id>.json`**; `forge task-expand` seeds a **compatibility task** (copies milestone Forge Actions/Validation) unless tasks already exist.
+- **`forge milestone-preview <id> --task <n>`** builds/saves reviewed plans from a task; plan ids **`m<id>-t<n>-<hash>`**; apply still uses **`milestone-apply-plan`** + gates (no review bypass).
+- Milestones may include optional **`- **Summary**:`** in `docs/milestones.md` for short roadmap text.
+
 #### Execution progress + run logs
 Structured run events ship for **`forge vertical-slice`** (and the same bus/hooks can extend to other commands later).
 

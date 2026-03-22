@@ -2,6 +2,7 @@
 
 import argparse
 import uuid
+from dataclasses import asdict
 
 from forge.vision import VisionManager
 from forge.design_manager import DesignManager
@@ -44,6 +45,12 @@ from forge.run_event_handlers import (
     write_run_meta,
 )
 from forge.run_events import RunEventBus
+from forge.task_service import (
+    expand_milestone_to_tasks,
+    get_task,
+    list_tasks,
+    task_count_for_milestone,
+)
 from forge.vertical_slice import (
     read_vision_file_text,
     resolve_vision_file_path,
@@ -179,27 +186,125 @@ class ForgeCLI:
 
     @staticmethod
     def milestone_list():
-        """List milestones parsed from milestones.md."""
+        """List milestones parsed from milestones.md (with status and task counts)."""
         if not Paths.MILESTONES_FILE.exists():
             print("Milestones file is missing.")
             return
-        milestones = DesignManager.load_document(Paths.MILESTONES_FILE).split("\n## ")[1:]
+        try:
+            milestones = MilestoneService.list_milestones()
+        except ValueError as exc:
+            print(f"Milestone definition error: {exc}")
+            return
+        state_path = Paths.SYSTEM_DIR / "milestone_state.json"
+        state: dict = {}
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                state = {}
         print("Milestones:")
-        for i, milestone in enumerate(milestones, start=1):
-            print(f"{i}. {milestone.splitlines()[0]}")
+        for m in milestones:
+            raw = state.get(str(m.id), {})
+            st = normalize_milestone_state_value(raw).get("status", "unknown")
+            n_tasks = task_count_for_milestone(m.id)
+            task_part = f" | tasks: {n_tasks}" if n_tasks else " | tasks: —"
+            summ = (m.summary or "").strip()
+            summ_part = f"\n   summary: {summ}" if summ else ""
+            print(
+                f"{m.id}. {m.title} | status: {st}{task_part}\n"
+                f"   objective: {m.objective[:120]}{'…' if len(m.objective) > 120 else ''}"
+                f"{summ_part}"
+            )
 
     @staticmethod
     def milestone_show(milestone_id: int):
-        """Show a single milestone in detail."""
+        """Show a single milestone (parsed fields + task hint)."""
         if not Paths.MILESTONES_FILE.exists():
             print("Milestones file is missing.")
             return
-        milestones = DesignManager.load_document(Paths.MILESTONES_FILE).split("\n## ")[1:]
-        if 1 <= milestone_id <= len(milestones):
-            print(f"Milestone {milestone_id}:")
-            print(milestones[milestone_id - 1])
-        else:
+        m = MilestoneService.get_milestone(milestone_id)
+        if not m:
             print("Invalid milestone ID.")
+            return
+        n = task_count_for_milestone(milestone_id)
+        print(f"Milestone {milestone_id}: {m.title}")
+        if (m.summary or "").strip():
+            print(f"Summary: {m.summary}")
+        print(f"Objective: {m.objective}")
+        print(f"Scope: {m.scope}")
+        print(f"Validation: {m.validation}")
+        if m.depends_on:
+            print(f"Depends on: {m.depends_on}")
+        print(f"Forge Actions: {len(m.forge_actions)} line(s)")
+        print(f"Forge Validation: {len(m.forge_validation)} line(s)")
+        if n:
+            print(f"Expanded tasks: {n}")
+        else:
+            print(
+                f"Expanded tasks: — (run `forge task-expand --milestone {milestone_id}`)"
+            )
+        if n:
+            print(f"Inspect: `forge task-list --milestone {milestone_id}`")
+
+    @staticmethod
+    def task_expand(milestone_id: int, *, force: bool = False, json_mode: bool = False) -> bool:
+        """Expand milestone into tasks JSON (compatibility task by default)."""
+        r = expand_milestone_to_tasks(milestone_id=milestone_id, force=force)
+        if json_mode:
+            print(json.dumps(r, indent=2, sort_keys=True))
+        else:
+            print(r.get("message", ""))
+        return bool(r.get("ok"))
+
+    @staticmethod
+    def task_list(milestone_id: int, json_mode: bool = False) -> None:
+        tasks = list_tasks(milestone_id)
+        if json_mode:
+            print(json.dumps([asdict(t) for t in tasks], indent=2, sort_keys=True))
+            return
+        if not tasks:
+            print(
+                f"No tasks for milestone {milestone_id}. "
+                f"Run `forge task-expand --milestone {milestone_id}`."
+            )
+            return
+        print(f"Tasks for milestone {milestone_id}:")
+        for t in tasks:
+            deps = f" | depends_on={t.depends_on}" if t.depends_on else ""
+            vshort = t.validation.replace("\n", " ")
+            if len(vshort) > 72:
+                vshort = vshort[:69] + "..."
+            print(f"  {t.id}. {t.title}{deps}")
+            print(f"      objective: {t.objective[:100]}{'…' if len(t.objective) > 100 else ''}")
+            print(f"      validation: {vshort or '—'}")
+
+    @staticmethod
+    def task_show(milestone_id: int, task_id: int, json_mode: bool = False) -> None:
+        t = get_task(milestone_id, task_id)
+        if not t:
+            print(f"No task {task_id} for milestone {milestone_id}.")
+            return
+        if json_mode:
+            print(json.dumps(asdict(t), indent=2, sort_keys=True))
+            return
+        print(f"Milestone {milestone_id} task {task_id}: {t.title}")
+        print(f"Status: {t.status}")
+        print(f"Objective: {t.objective}")
+        if (t.summary or "").strip():
+            print(f"Summary: {t.summary}")
+        if t.depends_on:
+            print(f"Depends on: {t.depends_on}")
+        if t.files_allowed:
+            print(f"Files allowed: {t.files_allowed}")
+        print(f"Validation: {t.validation}")
+        if (t.done_when or "").strip():
+            print(f"Done when: {t.done_when}")
+        print("Forge Actions:")
+        for line in t.forge_actions:
+            print(f"  - {line}")
+        print("Forge Validation:")
+        for line in t.forge_validation:
+            print(f"  - {line}")
 
     @staticmethod
     def milestone_start(milestone_id: int):
@@ -442,8 +547,9 @@ class ForgeCLI:
         json_mode: bool = False,
         save_plan: bool = False,
         planner_mode: str | None = None,
+        task_id: int | None = None,
     ):
-        """Dry-run preview of milestone execution (no writes)."""
+        """Dry-run preview of milestone (or task) execution (no writes)."""
         planner, planner_policy, planner_err = resolve_planner(mode_override=planner_mode)
         if planner_err:
             if json_mode:
@@ -481,21 +587,50 @@ class ForgeCLI:
                 print("Enforcement: reviewed-plan required for this planner.")
             return
 
-        if save_plan and milestone_id is None:
-            result = Executor.preview_next() if planner and planner.mode == "deterministic" else None
-            if result is None:
-                result = {"ok": False, "message": "Save-plan without milestone ID requires deterministic planner."}
-            if result.get("ok") and result.get("milestone_id") is not None:
-                result = Executor.save_reviewed_plan_for_milestone(
-                    result["milestone_id"], planner=planner, review_enforcement=enforcement
-                )
+        if task_id is not None and milestone_id is None:
+            result = {
+                "ok": False,
+                "message": "--task requires a milestone id (positional).",
+                "errors": ["--task requires a milestone id (positional)."],
+            }
+        elif save_plan and milestone_id is None:
+            if task_id is not None:
+                result = {
+                    "ok": False,
+                    "message": "--save-plan with --task requires an explicit milestone id.",
+                }
+            else:
+                result = Executor.preview_next() if planner and planner.mode == "deterministic" else None
+                if result is None:
+                    result = {
+                        "ok": False,
+                        "message": "Save-plan without milestone ID requires deterministic planner.",
+                    }
+                if result.get("ok") and result.get("milestone_id") is not None:
+                    result = Executor.save_reviewed_plan_for_milestone(
+                        result["milestone_id"], planner=planner, review_enforcement=enforcement
+                    )
         elif save_plan:
-            result = Executor.save_reviewed_plan_for_milestone(
-                milestone_id, planner=planner, review_enforcement=enforcement
-            )
+            assert milestone_id is not None
+            if task_id is not None:
+                result = Executor.save_reviewed_plan_for_task(
+                    milestone_id,
+                    task_id,
+                    planner=planner,
+                    review_enforcement=enforcement,
+                )
+            else:
+                result = Executor.save_reviewed_plan_for_milestone(
+                    milestone_id, planner=planner, review_enforcement=enforcement
+                )
         else:
             if milestone_id is None:
-                if planner and planner.mode == "deterministic":
+                if task_id is not None:
+                    result = {
+                        "ok": False,
+                        "message": "--task requires a milestone id (positional).",
+                    }
+                elif planner and planner.mode == "deterministic":
                     result = Executor.preview_next()
                 else:
                     # For non-deterministic planners, require explicit milestone id
@@ -503,6 +638,10 @@ class ForgeCLI:
                         "ok": False,
                         "message": "Previewing next milestone with non-deterministic planner requires explicit milestone ID.",
                     }
+            elif task_id is not None:
+                result = Executor.preview_milestone(
+                    milestone_id, planner=planner, task_id=task_id
+                )
             else:
                 result = Executor.preview_milestone(milestone_id, planner=planner)
         result["review_enforcement"] = enforcement
@@ -514,9 +653,15 @@ class ForgeCLI:
             print(result.get("message", "Preview unavailable."))
             return
 
-        print(
-            f"Preview Milestone: {result['milestone_id']}. {result.get('title', '')}"
-        )
+        if result.get("task_id") is not None:
+            print(
+                f"Preview Task: milestone {result['milestone_id']} task {result['task_id']}. "
+                f"{result.get('title', '')}"
+            )
+        else:
+            print(
+                f"Preview Milestone: {result['milestone_id']}. {result.get('title', '')}"
+            )
         pmeta = result.get("planner_metadata", {}) or {}
         planner_line = f"Planner: {result.get('planner_mode', 'deterministic')}"
         if pmeta.get("llm_client"):
@@ -1024,6 +1169,65 @@ def main() -> int:
         "--save-plan", action="store_true", help="Persist a reviewed plan artifact for later apply"
     )
     milestone_preview_parser.add_argument(
+        "--task",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Build preview/saved plan from this task id under .system/tasks/ (requires milestone id)",
+    )
+    milestone_preview_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    task_expand_parser = subparsers.add_parser(
+        "task-expand",
+        help="Create or refresh task breakdown for a milestone (default: one compatibility task)",
+    )
+    task_expand_parser.add_argument(
+        "--milestone",
+        type=int,
+        required=True,
+        metavar="ID",
+        help="Milestone id",
+    )
+    task_expand_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace existing task file from current milestone Forge Actions",
+    )
+    task_expand_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    task_list_parser = subparsers.add_parser(
+        "task-list", help="List tasks for a milestone"
+    )
+    task_list_parser.add_argument(
+        "--milestone",
+        type=int,
+        required=True,
+        metavar="ID",
+        help="Milestone id",
+    )
+    task_list_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    task_show_parser = subparsers.add_parser(
+        "task-show", help="Show one task under a milestone"
+    )
+    task_show_parser.add_argument(
+        "--milestone",
+        type=int,
+        required=True,
+        metavar="ID",
+        help="Milestone id",
+    )
+    task_show_parser.add_argument(
+        "--task",
+        type=int,
+        required=True,
+        metavar="ID",
+        help="Task id",
+    )
+    task_show_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     milestone_apply_plan_parser = subparsers.add_parser(
@@ -1081,6 +1285,19 @@ def main() -> int:
         "--count", type=int, default=3, help="Desired maximum number of synthesized milestones"
     )
     synthesis_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    milestone_generate_parser = subparsers.add_parser(
+        "milestone-generate",
+        help="Alias for milestone-synthesize (LLM milestone proposals)",
+    )
+    milestone_generate_parser.add_argument(
+        "--count",
+        type=int,
+        default=3,
+        help="Desired maximum number of synthesized milestones",
+    )
+    milestone_generate_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     synthesis_show_parser = subparsers.add_parser(
@@ -1292,7 +1509,20 @@ def main() -> int:
             json_mode=args.json,
             save_plan=args.save_plan,
             planner_mode=args.planner,
+            task_id=args.task,
         )
+    elif args.command == "task-expand":
+        return (
+            0
+            if ForgeCLI.task_expand(
+                args.milestone, force=args.force, json_mode=args.json
+            )
+            else 1
+        )
+    elif args.command == "task-list":
+        ForgeCLI.task_list(args.milestone, json_mode=args.json)
+    elif args.command == "task-show":
+        ForgeCLI.task_show(args.milestone, args.task, json_mode=args.json)
     elif args.command == "milestone-apply-plan":
         gate_validate_override = (
             True
@@ -1315,6 +1545,8 @@ def main() -> int:
     elif args.command == "execute-next":
         ForgeCLI.execute_next()
     elif args.command == "milestone-synthesize":
+        return 0 if ForgeCLI.milestone_synthesize(args.count, json_mode=args.json) else 1
+    elif args.command == "milestone-generate":
         return 0 if ForgeCLI.milestone_synthesize(args.count, json_mode=args.json) else 1
     elif args.command == "milestone-synthesis-show":
         return 0 if ForgeCLI.milestone_synthesis_show(args.synthesis_id, json_mode=args.json) else 1

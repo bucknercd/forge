@@ -23,6 +23,7 @@ class Milestone:
         objective: str,
         scope: str,
         validation: str,
+        summary: str = "",
         depends_on: List[int] | None = None,
         forge_actions: List[str] | None = None,
         forge_validation: List[str] | None = None,
@@ -34,6 +35,7 @@ class Milestone:
         self.objective = objective
         self.scope = scope
         self.validation = validation
+        self.summary = summary
         self.depends_on = depends_on or []
         self.forge_actions = forge_actions or []
         self.forge_validation = forge_validation or []
@@ -94,6 +96,7 @@ class MilestoneService:
                     objective="",
                     scope="",
                     validation="",
+                    summary="",
                 )
             elif current_milestone and line.startswith("- **Objective**:"):
                 current_milestone.objective = line.split(":", 1)[1].strip()
@@ -101,6 +104,8 @@ class MilestoneService:
                 current_milestone.scope = line.split(":", 1)[1].strip()
             elif current_milestone and line.startswith("- **Validation**:"):
                 current_milestone.validation = line.split(":", 1)[1].strip()
+            elif current_milestone and line.startswith("- **Summary**:"):
+                current_milestone.summary = line.split(":", 1)[1].strip()
             elif current_milestone and line.startswith("- **Depends On**:"):
                 # Accept flexible formatting like: "1, 2", "[1,2]", "1"
                 deps_text = line.split(":", 1)[1].strip()
