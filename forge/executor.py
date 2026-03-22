@@ -314,7 +314,7 @@ class Executor:
         state_file: Path | None = None,
     ) -> dict[str, Any]:
         """
-        Shared task orchestration used by ``execute-next``, ``milestone-apply-plan``,
+        Shared task orchestration used by ``run-next``, ``task-apply-plan``,
         workflow guarded apply, and ``vertical-slice``: apply (optional first attempt
         uses a pre-saved reviewed plan id), artifact tests, validation/test batch,
         bounded replans with feedback.
@@ -642,7 +642,7 @@ class Executor:
     ) -> dict:
         """
         Milestone roadmap + selector preamble, then
-        :meth:`run_task_apply_with_repair_loop` (execute-next repair semantics).
+        :meth:`run_task_apply_with_repair_loop` (``run-next`` repair semantics).
         """
         state_file = Paths.SYSTEM_DIR / "milestone_state.json"
         state = Executor._load_milestone_state_file()

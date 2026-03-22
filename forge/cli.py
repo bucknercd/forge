@@ -13,6 +13,7 @@ from pathlib import Path
 from forge.design_manager import MilestoneService
 from datetime import datetime
 import json
+import sys
 from forge.executor import Executor
 from forge.milestone_selector import MilestoneSelector
 from forge.milestone_state import MilestoneStateRepository
@@ -550,7 +551,7 @@ class ForgeCLI:
 
     @staticmethod
     def execute_next():
-        """Execute the next eligible milestone in one orchestration step."""
+        """Run the next roadmap milestone's next pending task (``run-next`` CLI)."""
         result = Executor.execute_next()
         outcome = result.get("outcome")
         milestone_id = result.get("milestone_id")
@@ -591,7 +592,7 @@ class ForgeCLI:
         if enforcement["requires_save_plan"] and not save_plan:
             msg = (
                 "Policy requires reviewed-plan workflow for non-deterministic planners. "
-                "Re-run with --save-plan and apply via milestone-apply-plan."
+                "Re-run with --save-plan and apply via task-apply-plan."
             )
             payload = {
                 "ok": False,
@@ -714,9 +715,9 @@ class ForgeCLI:
                     print(f"      objective: {obj or '—'}")
                     print(f"      depends_on: {deps_s}")
             print(
-                f"Run: forge milestone-preview {mid_sel} --task <n> [--save-plan]"
+                f"Run: forge task-preview {mid_sel} --task <n> [--save-plan]"
                 if mid_sel is not None
-                else "Run: forge milestone-preview <id> --task <n>"
+                else "Run: forge task-preview <id> --task <n>"
             )
             return
 
@@ -1366,9 +1367,124 @@ class ForgeCLI:
                 print(f"  plan_id={s.get('plan_id')}")
         return ok
 
+
+def _warn_deprecated_cli(old: str, new: str) -> None:
+    print(
+        f"Warning: `{old}` is deprecated; use `{new}`. "
+        "Milestones are roadmap-only—tasks are Forge's execution units.",
+        file=sys.stderr,
+    )
+
+
+def _deprecated_cli_command_renames() -> dict[str, str]:
+    """Old CLI names → current names (rewritten before argparse; not registered as subcommands)."""
+    return {
+        "milestone-preview": "task-preview",
+        "milestone-apply-plan": "task-apply-plan",
+        "execute-next": "run-next",
+    }
+
+
+def _rewrite_deprecated_cli_argv(argv: list[str]) -> list[str]:
+    if len(argv) < 2:
+        return argv
+    cmd = argv[1]
+    mp = _deprecated_cli_command_renames()
+    if cmd in mp:
+        new = mp[cmd]
+        _warn_deprecated_cli(cmd, new)
+        return [argv[0], new, *argv[2:]]
+    return argv
+
+
+def _dispatch_hidden_legacy_milestone_exec(argv: list[str]) -> int | None:
+    """
+    ``milestone-execute`` / ``milestone-retry`` are not argparse subcommands (keeps ``forge -h`` clean).
+    Return an exit code when handled, or ``None`` to continue normal parsing.
+    """
+    if len(argv) < 2:
+        return None
+    cmd = argv[1]
+    if cmd == "milestone-execute":
+        _warn_deprecated_cli(
+            "milestone-execute",
+            "forge run-next or forge task-preview … + forge task-apply-plan",
+        )
+        print(
+            "Note: legacy non-reviewed full-milestone apply (not task-scoped).",
+            file=sys.stderr,
+        )
+        if len(argv) < 3:
+            print(
+                "usage: forge milestone-execute <id>  (deprecated; prefer run-next)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            mid = int(argv[2])
+        except ValueError:
+            print("milestone-execute: milestone id must be an integer.", file=sys.stderr)
+            return 2
+        is_valid, missing = Paths.project_validation()
+        if not is_valid:
+            print("Current directory is not an initialized Forge project.")
+            print("Run `forge init` to bootstrap required directories/files.")
+            if missing:
+                print("Missing:")
+                for path in missing:
+                    print(f"- {path}")
+            return 0
+        ForgeCLI.milestone_execute(mid)
+        return 0
+    if cmd == "milestone-retry":
+        _warn_deprecated_cli(
+            "milestone-retry",
+            "forge run-next or forge task-preview … + forge task-apply-plan",
+        )
+        print(
+            "Note: legacy full-milestone retry (not task-scoped).",
+            file=sys.stderr,
+        )
+        if len(argv) < 3:
+            print(
+                "usage: forge milestone-retry <id>  (deprecated; prefer run-next)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            mid = int(argv[2])
+        except ValueError:
+            print("milestone-retry: milestone id must be an integer.", file=sys.stderr)
+            return 2
+        is_valid, missing = Paths.project_validation()
+        if not is_valid:
+            print("Current directory is not an initialized Forge project.")
+            print("Run `forge init` to bootstrap required directories/files.")
+            if missing:
+                print("Missing:")
+                for path in missing:
+                    print(f"- {path}")
+            return 0
+        ForgeCLI.milestone_retry(mid)
+        return 0
+    return None
+
+
 def main() -> int:
     Paths.refresh()
-    parser = argparse.ArgumentParser(prog="forge", description="Forge CLI")
+    argv = list(sys.argv)
+    legacy_rc = _dispatch_hidden_legacy_milestone_exec(argv)
+    if legacy_rc is not None:
+        return legacy_rc
+    argv = _rewrite_deprecated_cli_argv(argv)
+
+    parser = argparse.ArgumentParser(
+        prog="forge",
+        description=(
+            "Forge — milestones are roadmap (docs/milestones.md); "
+            "tasks (.system/tasks/) are the only execution units for apply and validation."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     # Init command
@@ -1380,44 +1496,51 @@ def main() -> int:
     # Design commands
     subparsers.add_parser("design-show", help="Show a summary of the current design artifacts")
 
-    # Milestone commands
-    subparsers.add_parser("milestone-list", help="List milestones")
-    milestone_show_parser = subparsers.add_parser("milestone-show", help="Show a specific milestone")
+    # Milestone roadmap (not executed directly)
+    subparsers.add_parser("milestone-list", help="List milestones (roadmap)")
+    milestone_show_parser = subparsers.add_parser(
+        "milestone-show", help="Show one milestone from the roadmap"
+    )
     milestone_show_parser.add_argument("id", type=int, help="Milestone ID")
 
     # Run history command
     subparsers.add_parser("run-history", help="Show recent run-history entries")
 
-    # Execute milestone command
-    subparsers.add_parser("milestone-execute", help="Execute a specific milestone").add_argument("id", type=int, help="Milestone ID")
-
-    # Retry milestone command
-    subparsers.add_parser("milestone-retry", help="Retry a specific milestone").add_argument("id", type=int, help="Milestone ID")
-
-    subparsers.add_parser("milestone-next", help="Print the next milestone")
-    subparsers.add_parser("milestone-sync-state", help="Reconcile milestone state with parsed milestones")
-    milestone_preview_parser = subparsers.add_parser(
-        "milestone-preview", help="Preview milestone execution without writing files"
+    subparsers.add_parser(
+        "milestone-next",
+        help="Show the next roadmap milestone the selector would pick (informational; not execution)",
     )
-    milestone_preview_parser.add_argument(
-        "id", nargs="?", type=int, help="Optional milestone ID to preview"
+    subparsers.add_parser(
+        "milestone-sync-state", help="Reconcile roadmap milestone state with docs/milestones.md"
     )
-    milestone_preview_parser.add_argument(
+    task_preview_parser = subparsers.add_parser(
+        "task-preview",
+        help="Preview or save a task-scoped reviewed plan (dry-run unless --save-plan)",
+    )
+    task_preview_parser.add_argument(
+        "id",
+        nargs="?",
+        type=int,
+        help="Milestone roadmap id (optional for some next-task preview paths)",
+    )
+    task_preview_parser.add_argument(
         "--planner",
         choices=["deterministic", "llm"],
         help="Override planner mode for this preview/save-plan command",
     )
-    milestone_preview_parser.add_argument(
-        "--save-plan", action="store_true", help="Persist a reviewed plan artifact for later apply"
+    task_preview_parser.add_argument(
+        "--save-plan",
+        action="store_true",
+        help="Persist a reviewed plan artifact for later task-apply-plan",
     )
-    milestone_preview_parser.add_argument(
+    task_preview_parser.add_argument(
         "--task",
         type=int,
         default=None,
         metavar="ID",
-        help="Build preview/saved plan from this task id under .system/tasks/ (requires milestone id)",
+        help="Task id under .system/tasks/ (required with --save-plan when milestone id is set)",
     )
-    milestone_preview_parser.add_argument(
+    task_preview_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     task_expand_parser = subparsers.add_parser(
@@ -1472,46 +1595,47 @@ def main() -> int:
     task_show_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
-    milestone_apply_plan_parser = subparsers.add_parser(
-        "milestone-apply-plan", help="Apply a previously reviewed milestone plan"
+    task_apply_parser = subparsers.add_parser(
+        "task-apply-plan",
+        help="Apply a saved task-scoped reviewed plan (validation gates + repair loop)",
     )
-    milestone_apply_plan_parser.add_argument("plan_id", type=str, help="Reviewed plan ID")
-    gate_validate_group = milestone_apply_plan_parser.add_mutually_exclusive_group()
-    gate_validate_group.add_argument(
+    task_apply_parser.add_argument("plan_id", type=str, help="Reviewed plan id (e.g. m1-t2-<hash>)")
+    tap_gv = task_apply_parser.add_mutually_exclusive_group()
+    tap_gv.add_argument(
         "--gate-validate",
         action="store_true",
-        help="Run milestone validation gate after apply",
+        help="Run Forge milestone validation as part of the post-apply gate batch",
     )
-    gate_validate_group.add_argument(
+    tap_gv.add_argument(
         "--no-gate-validate",
         action="store_true",
-        help="Disable milestone validation gate for this apply",
+        help="Skip Forge milestone validation for this apply",
     )
-    milestone_apply_plan_parser.add_argument(
+    task_apply_parser.add_argument(
         "--gate-test-cmd",
         type=str,
         help="Run explicit repository test command gate after apply",
     )
-    milestone_apply_plan_parser.add_argument(
+    task_apply_parser.add_argument(
         "--no-gate-test-cmd",
         action="store_true",
         help="Disable configured repository test command gate for this apply",
     )
-    milestone_apply_plan_parser.add_argument(
+    task_apply_parser.add_argument(
         "--gate-test-timeout-seconds",
         type=int,
         help="Override timeout seconds for repository test command gate",
     )
-    milestone_apply_plan_parser.add_argument(
+    task_apply_parser.add_argument(
         "--gate-test-output-max-chars",
         type=int,
         help="Override captured output size for repository test command gate",
     )
-    milestone_apply_plan_parser.add_argument(
+    task_apply_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     milestone_lint_parser = subparsers.add_parser(
-        "milestone-lint", help="Lint milestone execution definitions"
+        "milestone-lint", help="Lint milestone definitions in docs/milestones.md"
     )
     milestone_lint_parser.add_argument(
         "id", nargs="?", type=int, help="Optional milestone ID to lint"
@@ -1519,7 +1643,10 @@ def main() -> int:
     milestone_lint_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
-    subparsers.add_parser("execute-next", help="Execute the next eligible milestone")
+    subparsers.add_parser(
+        "run-next",
+        help="Run the next pending task (task-scoped execution for the selected roadmap milestone)",
+    )
     synthesis_parser = subparsers.add_parser(
         "milestone-synthesize", help="Generate reviewed milestone proposals from repo context"
     )
@@ -1558,7 +1685,8 @@ def main() -> int:
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     workflow_parser = subparsers.add_parser(
-        "workflow-guarded", help="Run explicit guarded synthesis->plan->apply workflow"
+        "workflow-guarded",
+        help="Guarded workflow: optional synthesis, then task preview/save and task apply",
     )
     workflow_parser.add_argument(
         "--synthesize",
@@ -1710,7 +1838,7 @@ def main() -> int:
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv[1:] if len(argv) > 1 else [])
 
     if args.command not in {"init", "status", None}:
         is_valid, missing = Paths.project_validation()
@@ -1733,19 +1861,13 @@ def main() -> int:
         ForgeCLI.milestone_list()
     elif args.command == "milestone-show":
         ForgeCLI.milestone_show(args.id)
-    elif args.command == "milestone-start":
-        ForgeCLI.milestone_start(args.id)
-    elif args.command == "milestone-execute":
-        ForgeCLI.milestone_execute(args.id)
-    elif args.command == "milestone-retry":
-        ForgeCLI.milestone_retry(args.id)
     elif args.command == "run-history":
         ForgeCLI.run_history()
     elif args.command == "milestone-next":
         ForgeCLI.milestone_next()
     elif args.command == "milestone-sync-state":
         ForgeCLI.milestone_sync_state()
-    elif args.command == "milestone-preview":
+    elif args.command == "task-preview":
         ForgeCLI.milestone_preview(
             args.id,
             json_mode=args.json,
@@ -1765,7 +1887,7 @@ def main() -> int:
         ForgeCLI.task_list(args.milestone, json_mode=args.json)
     elif args.command == "task-show":
         ForgeCLI.task_show(args.milestone, args.task, json_mode=args.json)
-    elif args.command == "milestone-apply-plan":
+    elif args.command == "task-apply-plan":
         gate_validate_override = (
             True
             if args.gate_validate
@@ -1784,7 +1906,7 @@ def main() -> int:
         ) else 1
     elif args.command == "milestone-lint":
         return 0 if ForgeCLI.milestone_lint(args.id, json_mode=args.json) else 1
-    elif args.command == "execute-next":
+    elif args.command == "run-next":
         ForgeCLI.execute_next()
     elif args.command == "milestone-synthesize":
         return 0 if ForgeCLI.milestone_synthesize(args.count, json_mode=args.json) else 1

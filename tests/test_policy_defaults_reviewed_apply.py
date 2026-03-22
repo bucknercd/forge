@@ -28,7 +28,7 @@ def _init_and_write_milestone(tmp_path, monkeypatch, capsys):
 def _save_plan_id(monkeypatch, capsys) -> str:
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"],
+        ["forge", "task-preview", "1", "--task", "1", "--save-plan", "--json"],
     )
     assert main() == 0
     preview = json.loads(capsys.readouterr().out)
@@ -39,7 +39,7 @@ def test_no_config_present_uses_existing_behavior(tmp_path, monkeypatch, capsys)
     _init_and_write_milestone(tmp_path, monkeypatch, capsys)
     plan_id = _save_plan_id(monkeypatch, capsys)
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-apply-plan", plan_id, "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-apply-plan", plan_id, "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -65,7 +65,7 @@ def test_valid_config_defaults_are_applied(tmp_path, monkeypatch, capsys):
     )
     plan_id = _save_plan_id(monkeypatch, capsys)
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-apply-plan", plan_id, "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-apply-plan", plan_id, "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -97,7 +97,7 @@ def test_cli_flags_override_config_defaults(tmp_path, monkeypatch, capsys):
         "sys.argv",
         [
             "forge",
-            "milestone-apply-plan",
+            "task-apply-plan",
             plan_id,
             "--no-gate-validate",
             "--no-gate-test-cmd",
@@ -120,7 +120,7 @@ def test_invalid_config_reports_actionable_error(tmp_path, monkeypatch, capsys):
     )
     plan_id = _save_plan_id(monkeypatch, capsys)
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-apply-plan", plan_id, "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-apply-plan", plan_id, "--json"])
     assert main() == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False

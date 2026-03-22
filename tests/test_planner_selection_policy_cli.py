@@ -28,7 +28,7 @@ def _bootstrap(tmp_path, monkeypatch, capsys):
 
 def test_no_planner_config_defaults_to_deterministic(tmp_path, monkeypatch, capsys):
     _bootstrap(tmp_path, monkeypatch, capsys)
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -41,7 +41,7 @@ def test_repo_default_planner_mode_llm(tmp_path, monkeypatch, capsys):
         json.dumps({"planner": {"mode": "llm", "llm_client": "stub"}}, indent=2),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -56,7 +56,7 @@ def test_cli_override_planner_mode(tmp_path, monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-preview", "1", "--task", "1", "--planner", "deterministic", "--json"],
+        ["forge", "task-preview", "1", "--task", "1", "--planner", "deterministic", "--json"],
     )
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
@@ -66,7 +66,7 @@ def test_cli_override_planner_mode(tmp_path, monkeypatch, capsys):
 
 def test_llm_planner_selected_but_not_configured_fails_clearly(tmp_path, monkeypatch, capsys):
     _bootstrap(tmp_path, monkeypatch, capsys)
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--planner", "llm", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--planner", "llm", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
@@ -77,7 +77,7 @@ def test_save_plan_json_includes_planner_mode(tmp_path, monkeypatch, capsys):
     _bootstrap(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"],
+        ["forge", "task-preview", "1", "--task", "1", "--save-plan", "--json"],
     )
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
@@ -92,7 +92,7 @@ def test_cli_human_preview_shows_llm_provenance_warning(tmp_path, monkeypatch, c
         json.dumps({"planner": {"mode": "llm", "llm_client": "stub"}}, indent=2),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1"])
     assert main() == 0
     out = capsys.readouterr().out
     assert "Planner: llm (stub)" in out
@@ -105,7 +105,7 @@ def test_llm_preview_allowed_when_enforcement_not_configured(tmp_path, monkeypat
         json.dumps({"planner": {"mode": "llm", "llm_client": "stub"}}, indent=2),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -129,7 +129,7 @@ def test_llm_preview_blocked_when_review_enforcement_enabled_json(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
@@ -156,7 +156,7 @@ def test_llm_preview_blocked_when_review_enforcement_enabled_human(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1"])
     assert main() == 0
     out = capsys.readouterr().out
     assert "requires reviewed-plan workflow" in out
@@ -180,7 +180,7 @@ def test_llm_save_plan_allowed_with_review_enforcement_enabled(tmp_path, monkeyp
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"],
+        ["forge", "task-preview", "1", "--task", "1", "--save-plan", "--json"],
     )
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
@@ -206,7 +206,7 @@ def test_deterministic_preview_unaffected_when_review_enforcement_enabled(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -233,7 +233,7 @@ def test_openai_planner_still_blocked_by_review_enforcement_without_save_plan(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False

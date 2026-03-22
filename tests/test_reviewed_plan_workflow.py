@@ -109,7 +109,7 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
     )
 
     monkeypatch.setattr(
-        "sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"]
+        "sys.argv", ["forge", "task-preview", "1", "--task", "1", "--save-plan", "--json"]
     )
     assert main() == 0
     preview_payload = json.loads(capsys.readouterr().out)
@@ -119,7 +119,7 @@ def test_cli_reviewed_plan_json_workflow(tmp_path, monkeypatch, capsys):
     assert "review_enforcement" in preview_payload
     plan_id = preview_payload["plan_id"]
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-apply-plan", plan_id, "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-apply-plan", plan_id, "--json"])
     assert main() == 0
     apply_payload = json.loads(capsys.readouterr().out)
     assert apply_payload["ok"] is True
@@ -224,7 +224,7 @@ def test_cli_apply_plan_json_includes_gate_results(tmp_path, monkeypatch, capsys
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"]
+        "sys.argv", ["forge", "task-preview", "1", "--task", "1", "--save-plan", "--json"]
     )
     assert main() == 0
     plan_id = json.loads(capsys.readouterr().out)["plan_id"]
@@ -233,7 +233,7 @@ def test_cli_apply_plan_json_includes_gate_results(tmp_path, monkeypatch, capsys
         "sys.argv",
         [
             "forge",
-            "milestone-apply-plan",
+            "task-apply-plan",
             plan_id,
             "--gate-test-cmd",
             "python -c \"print('ok')\"",
@@ -242,6 +242,6 @@ def test_cli_apply_plan_json_includes_gate_results(tmp_path, monkeypatch, capsys
     )
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "milestone-apply-plan"
+    assert payload["command"] == "task-apply-plan"
     assert payload["apply_ok"] is True
     assert "gate_results" in payload

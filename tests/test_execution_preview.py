@@ -83,14 +83,14 @@ def test_cli_milestone_preview_specific_and_next(tmp_path, monkeypatch, capsys):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1"])
     assert main() == 0
     out_specific = capsys.readouterr().out
     assert "Preview Task: milestone 1 task 1." in out_specific
     assert "Planned Actions:" in out_specific
     assert "diff:" in out_specific
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview"])
     assert main() == 0
     out_next = capsys.readouterr().out
     assert "Preview Task: milestone 1 task 1." in out_next
@@ -120,11 +120,11 @@ def test_cli_milestone_preview_json_mode(tmp_path, monkeypatch, capsys):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--task", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--task", "1", "--json"])
     assert main() == 0
     out = capsys.readouterr().out
     payload = json.loads(out)
-    assert payload["command"] == "milestone-preview"
+    assert payload["command"] == "task-preview"
     assert payload["ok"] is True
     assert payload["milestone_id"] == 1
     assert payload["task_id"] == 1

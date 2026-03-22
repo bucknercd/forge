@@ -27,7 +27,7 @@ def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
     Expects executor preview result fields.
     """
     return {
-        "command": "milestone-preview",
+        "command": "task-preview",
         "ok": bool(payload.get("ok", False)),
         "plan_id": payload.get("plan_id"),
         "plan_file": payload.get("plan_file"),
@@ -52,7 +52,7 @@ def serialize_preview_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 def serialize_apply_plan_result(payload: dict[str, Any]) -> dict[str, Any]:
     return {
-        "command": "milestone-apply-plan",
+        "command": "task-apply-plan",
         "ok": bool(payload.get("ok", False)),
         "apply_ok": bool(payload.get("apply_ok", payload.get("ok", False))),
         "gates_ok": bool(payload.get("gates_ok", True)),

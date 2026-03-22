@@ -146,7 +146,7 @@ def test_cli_commands_operate_after_init(tmp_path, monkeypatch, capsys):
     next_out = capsys.readouterr().out
     assert "Next milestone: 1." in next_out
 
-    monkeypatch.setattr("sys.argv", ["forge", "execute-next"])
+    monkeypatch.setattr("sys.argv", ["forge", "run-next"])
     main()
     exec_out = capsys.readouterr().out
     assert "Milestone 1 completed" in exec_out
@@ -205,7 +205,7 @@ def test_missing_objective_prevents_execute_next_cleanly(tmp_path, monkeypatch, 
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("sys.argv", ["forge", "execute-next"])
+    monkeypatch.setattr("sys.argv", ["forge", "run-next"])
     main()
     out = capsys.readouterr().out
     assert "Milestone definition error:" in out

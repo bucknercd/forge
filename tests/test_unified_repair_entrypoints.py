@@ -1,4 +1,4 @@
-"""Integration: milestone-apply-plan and vertical-slice use the shared repair loop."""
+"""Integration: task-apply-plan and vertical-slice use the shared repair loop."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _init_policy_milestone(tmp_path, monkeypatch, capsys):
 def _save_plan_id(monkeypatch, capsys) -> str:
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-preview", "1", "--task", "1", "--save-plan", "--json"],
+        ["forge", "task-preview", "1", "--task", "1", "--save-plan", "--json"],
     )
     assert main() == 0
     preview = json.loads(capsys.readouterr().out)
@@ -85,7 +85,7 @@ def test_milestone_apply_plan_repair_succeeds_on_second_attempt(
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-apply-plan", plan_id, "--gate-validate", "--json"],
+        ["forge", "task-apply-plan", plan_id, "--gate-validate", "--json"],
     )
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
@@ -121,7 +121,7 @@ def test_milestone_apply_plan_repair_exhausted_task_stays_incomplete(
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["forge", "milestone-apply-plan", plan_id, "--gate-validate", "--json"],
+        ["forge", "task-apply-plan", plan_id, "--gate-validate", "--json"],
     )
     assert main() == 1
     payload = json.loads(capsys.readouterr().out)

@@ -50,7 +50,7 @@ def test_milestone_preview_json_requires_task_selection_without_task(tmp_path, m
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["forge", "milestone-preview", "1", "--json"])
+    monkeypatch.setattr("sys.argv", ["forge", "task-preview", "1", "--json"])
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False

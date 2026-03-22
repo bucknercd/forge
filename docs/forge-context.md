@@ -172,10 +172,10 @@ The CLI is a thin wrapper and should not be the primary integration boundary.
 
 ## Orchestration
 
-Forge supports a high-level execution loop via `execute-next`.
+Forge supports a high-level execution loop via `run-next` (task-first: the next roadmap milestone’s next pending task).
 
-- Automatically selects the next eligible milestone
-- Executes and validates it
+- Automatically selects the next eligible milestone (roadmap ordering)
+- Plans/applies/validates the **selected task** (not the whole milestone in one shot)
 - Updates runtime state
 - Reports outcome
 
@@ -217,9 +217,9 @@ Current file creation/edit support includes:
 See README Quick Start (vertical slice) for usage and expected behavior.
 
 #### Tasks (two-layer planning)
-- **Execution is task-only:** preview, save-plan, **`execute-next`**, **`vertical-slice`**, and **`workflow-guarded`** ensure **`.system/tasks/m<id>.json`** exists (same expansion as **`forge task-expand`**) and operate on a **task id**—explicit **`--task`** or the **next pending task**. Milestones in **`docs/milestones.md`** are not executed directly.
+- **Execution is task-only:** preview, save-plan, **`run-next`**, **`vertical-slice`**, and **`workflow-guarded`** ensure **`.system/tasks/m<id>.json`** exists (same expansion as **`forge task-expand`**) and operate on a **task id**—explicit **`--task`** or the **next pending task**. Milestones in **`docs/milestones.md`** are not executed directly.
 - Task JSON holds **2–6 ordered tasks** when deterministic splitting succeeds (`mark_milestone_completed` + validation on the last task); optional LLM JSON expansion when a non-stub OpenAI client is configured; else **one compatibility task**. **`--force`** on **`task-expand`** regenerates from the current milestone text.
-- **`forge milestone-preview <id>`** without **`--task`** lists tasks; with **`--task <n>`** builds/saves reviewed plans; plan ids **`m<id>-t<n>-<hash>`**; apply uses **`milestone-apply-plan`** + gates. Legacy reviewed plans without **`task_id`** may still apply against the milestone definition in docs.
+- **`forge task-preview <id>`** without **`--task`** lists tasks; with **`--task <n>`** builds/saves reviewed plans; plan ids **`m<id>-t<n>-<hash>`**; apply uses **`task-apply-plan`** + gates. Legacy reviewed plans without **`task_id`** may still apply against the milestone definition in docs. Older CLI names (`milestone-preview`, `milestone-apply-plan`, `execute-next`) remain as deprecated aliases with stderr warnings.
 - Milestones may include optional **`- **Summary**:`** in `docs/milestones.md` for short roadmap text.
 
 #### Execution progress + run logs
@@ -251,7 +251,7 @@ Practical, code-oriented bounded editing (still stdlib-only, no AST):
 
 1. Policy and orchestration polish
    - optional limits (per-run file touches, path classes) and stricter review defaults where needed
-   - reuse run-event + JSONL patterns on `milestone-apply-plan` / workflow paths
+   - reuse run-event + JSONL patterns on `task-apply-plan` / workflow paths
    - further reduce reliance on `write_file` for incremental milestones
 
 ### Next TODOs (Stabilization Phase)
