@@ -140,6 +140,15 @@ def materialize_bundle(
 ) -> None:
     bus = as_emitter(event_bus)
     Paths.ensure_project_structure()
+    # Parse before any write so we never persist broken milestones.md from a bad bundle.
+    try:
+        MilestoneService.parse_milestones(bundle.milestones_md)
+    except ValueError as exc:
+        raise ValueError(
+            f"Refusing to write docs/milestones.md: milestone markdown is invalid ({exc}). "
+            "Fix milestones_md or re-run vertical-slice / LLM generation."
+        ) from exc
+
     VisionManager.save_vision(bundle.vision)
     bus.emit(ARTIFACT_WRITTEN, path=_artifact_rel(Paths.VISION_FILE), kind="vision")
     DesignManager.save_document(Paths.REQUIREMENTS_FILE, bundle.requirements_md)
@@ -156,7 +165,7 @@ def materialize_bundle(
     bus.emit(
         ARTIFACT_WRITTEN, path=_artifact_rel(Paths.MILESTONES_FILE), kind="milestones"
     )
-    # Ensure milestones parse before planning
+    # Re-read from disk for parity with the rest of the pipeline
     MilestoneService.list_milestones()
 
 
@@ -625,10 +634,28 @@ def run_vertical_slice(
                     bundle = generate_bundle_from_llm_fixed_vision(fixed_vision, client)
                 else:
                     bundle = generate_bundle_from_llm(idea, client)
+            except WeakMilestonePlanError as exc:
+                msg = (
+                    "Weak milestone plan (bootstrap-only, not grounded in the idea/vision, "
+                    "or missing real code actions): "
+                    + "; ".join(exc.messages)
+                )
+                stages.append(
+                    {
+                        "stage": "llm_generation",
+                        "ok": False,
+                        "mode": doc_mode,
+                        "message": msg,
+                    }
+                )
+                bus.emit(PHASE_COMPLETED, phase="llm_generation", ok=False, message=msg)
+                bus.emit(RUN_FAILED, reason=msg, phase="llm_generation")
+                bus.emit(RUN_COMPLETED, ok=False)
+                return _finalize(stages, ok=False)
             except ValueError as exc:
                 stages.append(
                     {
-                        "stage": "materialize_docs",
+                        "stage": "llm_generation",
                         "ok": False,
                         "mode": doc_mode,
                         "message": str(exc),
@@ -648,6 +675,20 @@ def run_vertical_slice(
                 materialize_bundle(bundle, event_bus=bus)
             except OSError as exc:
                 msg = f"Failed to write docs: {exc}"
+                stages.append(
+                    {
+                        "stage": "materialize_docs",
+                        "ok": False,
+                        "mode": doc_mode,
+                        "message": msg,
+                    }
+                )
+                bus.emit(PHASE_COMPLETED, phase="materialize_docs", ok=False, message=msg)
+                bus.emit(RUN_FAILED, reason=msg, phase="materialize_docs")
+                bus.emit(RUN_COMPLETED, ok=False)
+                return _finalize(stages, ok=False)
+            except ValueError as exc:
+                msg = str(exc)
                 stages.append(
                     {
                         "stage": "materialize_docs",

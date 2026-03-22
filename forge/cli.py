@@ -141,6 +141,31 @@ class ForgeCLI:
             print(f"{milestone.id}. {milestone.title} [{milestone_state}]")
 
     @staticmethod
+    def run_history(limit: int = 20) -> None:
+        """Print recent entries from ``.system/run_history.log`` (JSONL)."""
+        entries = RunHistory.get_recent_entries(limit=max(1, limit))
+        if not entries:
+            print("No run-history entries yet.")
+            return
+        print(f"Recent run history (up to {len(entries)} entries, oldest first):")
+        for e in entries:
+            ts = e.get("ts", "")
+            if "milestone_id" in e:
+                mid = e.get("milestone_id")
+                title = e.get("milestone_title", "")
+                st = e.get("status", "")
+                err = e.get("error_message")
+                line = f"  {ts}  milestone={mid} {title!r} status={st}"
+                if err:
+                    line += f" error={err!r}"
+                print(line)
+            else:
+                task = e.get("task", "")
+                summary = e.get("summary", "")
+                st = e.get("status", "")
+                print(f"  {ts}  [{st}] {task}: {summary}")
+
+    @staticmethod
     def status():
         """Show current repository state."""
         report = analyze_project_status()
@@ -1504,7 +1529,15 @@ def main() -> int:
     milestone_show_parser.add_argument("id", type=int, help="Milestone ID")
 
     # Run history command
-    subparsers.add_parser("run-history", help="Show recent run-history entries")
+    run_history_parser = subparsers.add_parser(
+        "run-history", help="Show recent run-history entries (.system/run_history.log)"
+    )
+    run_history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum number of recent entries to show (default: 20)",
+    )
 
     subparsers.add_parser(
         "milestone-next",
@@ -1862,7 +1895,7 @@ def main() -> int:
     elif args.command == "milestone-show":
         ForgeCLI.milestone_show(args.id)
     elif args.command == "run-history":
-        ForgeCLI.run_history()
+        ForgeCLI.run_history(limit=args.limit)
     elif args.command == "milestone-next":
         ForgeCLI.milestone_next()
     elif args.command == "milestone-sync-state":

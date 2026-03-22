@@ -49,39 +49,103 @@ _FORGE_HEADER_SUBSTITUTIONS: list[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
+_MILESTONE_HEADING_RE = re.compile(r"^##\s+Milestone\s+\d+\s*:\s*.+$")
+
+
+def _rewrite_forge_header_line(stripped: str) -> tuple[str | None, list[str]]:
+    """
+    If ``stripped`` is a Forge Actions / Forge Validation header variant, return the
+    canonical ``- **Forge …**:` line (column 0).
+    """
+    warns: list[str] = []
+    for pattern, repl in _FORGE_HEADER_SUBSTITUTIONS:
+        if pattern.match(stripped):
+            return repl, [f"Normalized milestone header line {stripped!r} to {repl!r}."]
+    if re.match(r"^-\s*\*\*Forge Actions\*\*\s*$", stripped, re.IGNORECASE):
+        return "- **Forge Actions**:", ["Added missing colon to '- **Forge Actions**' line."]
+    if re.match(r"^-\s*\*\*Forge Validation\*\*\s*$", stripped, re.IGNORECASE):
+        return "- **Forge Validation**:", ["Added missing colon to '- **Forge Validation**' line."]
+    if re.match(r"^Forge Actions\s*:?\s*$", stripped, re.IGNORECASE):
+        return "- **Forge Actions**:", [f"Normalized plain header {stripped!r} to '- **Forge Actions**:'."]
+    if re.match(r"^Forge Validation\s*:?\s*$", stripped, re.IGNORECASE):
+        return "- **Forge Validation**:", [f"Normalized plain header {stripped!r} to '- **Forge Validation**:'."]
+    return None, []
+
 
 def normalize_milestone_markdown(md: str) -> tuple[str, list[str]]:
     """
     Repair common LLM variants so :class:`MilestoneService` can parse Forge lists.
 
-    Does not change semantics of valid Forge markdown beyond header aliasing.
+    Handles:
+
+    - ``**Forge Validation**``: (and similar) without a leading ``- `` — this otherwise
+      leaves the parser inside **Forge Actions** and triggers false "expected '- '" errors.
+    - Heading-style / hash / plain-text Forge section titles.
+    - Indented list items (``  - action``) and ``*`` bullets under Forge Actions /
+      Forge Validation → column-0 ``- `` bullets (parser-safe flat list).
+
     Returns ``(normalized_text, warning_messages)``.
     """
     if not (md or "").strip():
         return md, []
     warnings: list[str] = []
     out_lines: list[str] = []
-    for line in md.splitlines():
-        stripped = line.strip()
-        replaced = False
-        for pattern, repl in _FORGE_HEADER_SUBSTITUTIONS:
-            if pattern.match(stripped):
-                out_lines.append(repl)
-                replaced = True
-                warnings.append(
-                    f"Normalized milestone header line {stripped!r} to {repl!r}."
-                )
-                break
-        if not replaced:
-            # ``- **Forge Actions**`` without colon
-            if re.match(r"^-\s*\*\*Forge Actions\*\*\s*$", stripped, re.IGNORECASE):
-                out_lines.append("- **Forge Actions**:")
-                warnings.append("Added missing colon to '- **Forge Actions**' line.")
-            elif re.match(r"^-\s*\*\*Forge Validation\*\*\s*$", stripped, re.IGNORECASE):
-                out_lines.append("- **Forge Validation**:")
-                warnings.append("Added missing colon to '- **Forge Validation**' line.")
-            else:
-                out_lines.append(line)
+    in_milestone = False
+    forge_zone: str | None = None  # "actions" | "validation"
+
+    for raw_line in md.splitlines():
+        stripped = raw_line.strip()
+
+        if stripped.startswith("## Milestone") and _MILESTONE_HEADING_RE.match(stripped):
+            in_milestone = True
+            forge_zone = None
+            out_lines.append(raw_line)
+            continue
+
+        if in_milestone and stripped.startswith("# ") and not stripped.startswith("##"):
+            in_milestone = False
+            forge_zone = None
+
+        rewritten, rw = _rewrite_forge_header_line(stripped)
+        if rewritten is not None:
+            warnings.extend(rw)
+            nline = rewritten
+        else:
+            nline = raw_line
+
+        nst = nline.strip()
+
+        if in_milestone:
+            if re.match(r"^-\s*\*\*Forge Actions\*\*:", nst, re.IGNORECASE):
+                forge_zone = "actions"
+                out_lines.append(nline)
+                continue
+            if re.match(r"^-\s*\*\*Forge Validation\*\*:", nst, re.IGNORECASE):
+                forge_zone = "validation"
+                out_lines.append(nline)
+                continue
+            if forge_zone and nst.startswith("- **"):
+                if not re.match(
+                    r"^-\s*\*\*Forge (Actions|Validation)\*\*:", nst, re.IGNORECASE
+                ):
+                    forge_zone = None
+
+            if forge_zone and nst:
+                indent_bullet = re.match(r"^(\s{2,})-\s+(.*)$", nline)
+                if indent_bullet and not nst.startswith("- **"):
+                    out_lines.append(f"- {indent_bullet.group(2).strip()}")
+                    warnings.append(
+                        "Flattened indented Forge Actions/Validation bullet to column-0 '- '."
+                    )
+                    continue
+                star_bullet = re.match(r"^\s*\*\s+(.+)$", nline)
+                if star_bullet and not nst.startswith("- **"):
+                    out_lines.append(f"- {star_bullet.group(1).strip()}")
+                    warnings.append("Normalized '*' bullet to '- ' in Forge list.")
+                    continue
+
+        out_lines.append(nline)
+
     normalized = "\n".join(out_lines)
     if md.endswith("\n") and not normalized.endswith("\n"):
         normalized += "\n"

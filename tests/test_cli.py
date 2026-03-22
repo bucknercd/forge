@@ -1,5 +1,5 @@
 import pytest
-from forge.cli import ForgeCLI
+from forge.cli import ForgeCLI, main
 from forge.paths import Paths
 from pathlib import Path
 import json
@@ -399,3 +399,27 @@ def test_milestone_lint_missing_id_reports_error(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Milestone 99 not found." in out
     assert "Lint Summary: 1 error(s) across 0 milestone(s) checked." in out
+
+
+def test_run_history_cli_prints_entries(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["forge", "init"])
+    assert main() == 0
+    Paths.refresh(tmp_path)
+    Paths.RUN_HISTORY_FILE.write_text(
+        json.dumps(
+            {
+                "ts": "2099-01-01T00:00:00",
+                "task": "demo task",
+                "status": "ok",
+                "summary": "summary line",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["forge", "run-history", "--limit", "5"])
+    assert main() == 0
+    out = capsys.readouterr().out
+    assert "demo task" in out
+    assert "summary line" in out
