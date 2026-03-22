@@ -96,6 +96,52 @@ def test_parse_path_file_contains():
     assert rule.substring == "def main"
 
 
+def test_parse_path_file_contains_single_quoted_needle():
+    rule = parse_forge_validation_line(
+        "path_file_contains src/logcheck.py 'def count_errors'", line_no=1
+    )
+    assert rule.rel_path == "src/logcheck.py"
+    assert rule.substring == "def count_errors"
+    assert rule.substring_quote_style == "single"
+
+
+def test_write_file_apply_and_validation_quoted_path_file_contains(tmp_path, monkeypatch):
+    """File on disk has no quote chars; validation line uses shell-like quotes."""
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.ensure_project_structure()
+    Paths.REQUIREMENTS_FILE.write_text("# Requirements\n\n", encoding="utf-8")
+    Paths.ARCHITECTURE_FILE.write_text("# Architecture\n\n", encoding="utf-8")
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n", encoding="utf-8")
+    Paths.MILESTONES_FILE.write_text("# Milestones\n\n", encoding="utf-8")
+    ms = """# Milestones
+
+## Milestone 1: Write example file
+
+- **Objective**: Create examples/hello.txt
+- **Scope**: One file
+- **Validation**: Content check
+
+- **Forge Actions**:
+  - write_file examples/hello.txt | def count_errors():\\n    return 1\\n
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains examples/hello.txt 'def count_errors'
+"""
+    Paths.MILESTONES_FILE.write_text(ms, encoding="utf-8")
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    plan = ExecutionPlanBuilder.build(milestone)
+    applier = ArtifactActionApplier(Paths)
+    res = applier.apply(plan, milestone, dry_run=False)
+    assert not res.errors
+    body = (tmp_path / "examples" / "hello.txt").read_text(encoding="utf-8")
+    assert "def count_errors" in body
+    rules = ExecutionPlanBuilder.parse_validation_rules(milestone)
+    ok, reason = validate_all_rules(rules, Paths)
+    assert ok, reason
+
+
 def test_write_file_apply_and_validation(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)

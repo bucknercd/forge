@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from forge.execution.parse import parse_forge_validation_line
+from forge.execution.validation_rules import RuleFileContains, RulePathFileContains
 from forge.paths import Paths
 
 if TYPE_CHECKING:
@@ -33,15 +35,6 @@ class ArtifactTestGenResult:
     skipped_reason: str | None = None
 
 
-# file_contains <target> <rest of line is needle>
-_RE_FILE_CONTAINS = re.compile(
-    r"^\s*file_contains\s+(requirements|architecture|decisions|milestones)\s+(.+)$",
-    re.IGNORECASE,
-)
-# path_file_contains <rel_path> <substring>
-_RE_PATH_CONTAINS = re.compile(
-    r"^\s*path_file_contains\s+(\S+)\s+(.+)$", re.IGNORECASE
-)
 _RE_WRITE_FILE = re.compile(
     r"^\s*write_file\s+((?:examples|src|scripts|tests)/[^\s|]+)\s*\|",
     re.IGNORECASE,
@@ -80,9 +73,13 @@ def generate_artifact_tests_for_task(
     idx = 0
 
     for raw in task.forge_validation:
-        m = _RE_FILE_CONTAINS.match(raw.strip())
-        if m:
-            target, needle = m.group(1).lower(), m.group(2).strip()
+        try:
+            rule = parse_forge_validation_line(raw.strip())
+        except ValueError:
+            continue
+        if isinstance(rule, RuleFileContains):
+            target = rule.target
+            needle = rule.substring
             rel = _TARGET_TO_RELPATH.get(target)
             if rel and needle:
                 idx += 1
@@ -95,9 +92,8 @@ def generate_artifact_tests_for_task(
                     f"    text = p.read_text(encoding='utf-8')\n"
                     f"    assert {needle!r} in text\n"
                 )
-        m2 = _RE_PATH_CONTAINS.match(raw.strip())
-        if m2:
-            rel_p, sub = m2.group(1).strip(), m2.group(2).strip()
+        elif isinstance(rule, RulePathFileContains):
+            rel_p, sub = rule.rel_path, rule.substring
             if rel_p and sub and not rel_p.startswith(".."):
                 idx += 1
                 fn = f"test_task_validation_path_contains_{idx}"

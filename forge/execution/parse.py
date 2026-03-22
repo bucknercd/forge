@@ -26,6 +26,7 @@ from forge.execution.validation_rules import (
     RulePathFileContains,
     RuleSectionContains,
 )
+from forge.execution.validation_substring_parse import parse_validation_needle
 
 TARGETS = frozenset({"requirements", "architecture", "decisions", "milestones"})
 
@@ -412,8 +413,8 @@ def parse_forge_validation_line(raw: str, line_no: int | None = None) -> ForgeVa
                     line_no,
                 )
             )
-        _, relpath, substring = toks
-        if not relpath.strip() or not substring.strip():
+        _, relpath, substring_field = toks
+        if not relpath.strip():
             raise ValueError(
                 _fmt_diag(
                     "forge validation",
@@ -421,7 +422,18 @@ def parse_forge_validation_line(raw: str, line_no: int | None = None) -> ForgeVa
                     line_no,
                 )
             )
-        return RulePathFileContains(rel_path=relpath.strip(), substring=substring)
+        try:
+            needle = parse_validation_needle(substring_field, line_no=line_no)
+        except ValueError as exc:
+            raise ValueError(
+                _fmt_diag("forge validation", f"path_file_contains: {exc}", line_no)
+            ) from exc
+        return RulePathFileContains(
+            rel_path=relpath.strip(),
+            substring=needle.needle,
+            substring_input=needle.raw_input,
+            substring_quote_style=needle.quote_style,
+        )
 
     if len(parts) < 2:
         raise ValueError(
@@ -439,8 +451,19 @@ def parse_forge_validation_line(raw: str, line_no: int | None = None) -> ForgeVa
                     line_no,
                 )
             )
-        substring = line.split(maxsplit=2)[2]
-        return RuleFileContains(target=target, substring=substring)  # type: ignore[arg-type]
+        substring_field = line.split(maxsplit=2)[2]
+        try:
+            needle = parse_validation_needle(substring_field, line_no=line_no)
+        except ValueError as exc:
+            raise ValueError(
+                _fmt_diag("forge validation", f"file_contains: {exc}", line_no)
+            ) from exc
+        return RuleFileContains(
+            target=target,  # type: ignore[arg-type]
+            substring=needle.needle,
+            substring_input=needle.raw_input,
+            substring_quote_style=needle.quote_style,
+        )
 
     if kind == "section_contains":
         if len(parts) < 4:
@@ -455,11 +478,19 @@ def parse_forge_validation_line(raw: str, line_no: int | None = None) -> ForgeVa
                 )
             )
         section_heading = parts[2]
-        substring = line.split(maxsplit=3)[3]
+        substring_field = line.split(maxsplit=3)[3]
+        try:
+            needle = parse_validation_needle(substring_field, line_no=line_no)
+        except ValueError as exc:
+            raise ValueError(
+                _fmt_diag("forge validation", f"section_contains: {exc}", line_no)
+            ) from exc
         return RuleSectionContains(
             target=target,  # type: ignore[arg-type]
             section_heading=section_heading,
-            substring=substring,
+            substring=needle.needle,
+            substring_input=needle.raw_input,
+            substring_quote_style=needle.quote_style,
         )
 
     raise ValueError(

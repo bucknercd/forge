@@ -13,6 +13,8 @@ from forge.execution.safe_paths import resolve_safe_project_path
 class RuleFileContains:
     target: Literal["requirements", "architecture", "decisions", "milestones"]
     substring: str
+    substring_input: str | None = None
+    substring_quote_style: Literal["none", "single", "double"] = "none"
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,8 @@ class RulePathFileContains:
 
     rel_path: str
     substring: str
+    substring_input: str | None = None
+    substring_quote_style: Literal["none", "single", "double"] = "none"
 
 
 @dataclass(frozen=True)
@@ -28,9 +32,44 @@ class RuleSectionContains:
     target: Literal["requirements", "architecture", "decisions", "milestones"]
     section_heading: str
     substring: str
+    substring_input: str | None = None
+    substring_quote_style: Literal["none", "single", "double"] = "none"
 
 
 ForgeValidationRule = Union[RuleFileContains, RulePathFileContains, RuleSectionContains]
+
+
+def _validation_substring_diag(rule: ForgeValidationRule) -> str:
+    """Human-readable parse/unquote context for validation failures."""
+    if isinstance(rule, RulePathFileContains):
+        bits = [
+            f"rel_path={rule.rel_path!r}",
+            f"needle={rule.substring!r}",
+            f"unquote_applied={'yes' if rule.substring_quote_style != 'none' else 'no'}",
+        ]
+        if rule.substring_input is not None:
+            bits.append(f"raw_substring_field={rule.substring_input!r}")
+        return "; ".join(bits)
+    if isinstance(rule, RuleFileContains):
+        bits = [
+            f"target={rule.target!r}",
+            f"needle={rule.substring!r}",
+            f"unquote_applied={'yes' if rule.substring_quote_style != 'none' else 'no'}",
+        ]
+        if rule.substring_input is not None:
+            bits.append(f"raw_substring_field={rule.substring_input!r}")
+        return "; ".join(bits)
+    if isinstance(rule, RuleSectionContains):
+        bits = [
+            f"target={rule.target!r}",
+            f"section={rule.section_heading!r}",
+            f"needle={rule.substring!r}",
+            f"unquote_applied={'yes' if rule.substring_quote_style != 'none' else 'no'}",
+        ]
+        if rule.substring_input is not None:
+            bits.append(f"raw_substring_field={rule.substring_input!r}")
+        return "; ".join(bits)
+    return ""
 
 
 def resolve_target_path(
@@ -58,7 +97,8 @@ def validate_rule(rule: ForgeValidationRule, paths_mod) -> tuple[bool, str]:
         if rule.substring not in text:
             return (
                 False,
-                f"path_file_contains failed: {path} missing substring {rule.substring!r}",
+                f"path_file_contains failed: {path} missing substring {rule.substring!r} "
+                f"({_validation_substring_diag(rule)})",
             )
         return True, ""
 
@@ -70,7 +110,11 @@ def validate_rule(rule: ForgeValidationRule, paths_mod) -> tuple[bool, str]:
 
     if isinstance(rule, RuleFileContains):
         if rule.substring not in text:
-            return False, f"file_contains failed: {path} missing substring {rule.substring!r}"
+            return (
+                False,
+                f"file_contains failed: {path} missing substring {rule.substring!r} "
+                f"({_validation_substring_diag(rule)})",
+            )
         return True, ""
 
     if isinstance(rule, RuleSectionContains):
@@ -83,7 +127,8 @@ def validate_rule(rule: ForgeValidationRule, paths_mod) -> tuple[bool, str]:
         if rule.substring not in body:
             return (
                 False,
-                f"section_contains failed: substring missing in section {rule.section_heading!r} of {path}",
+                f"section_contains failed: substring missing in section {rule.section_heading!r} of {path} "
+                f"({_validation_substring_diag(rule)})",
             )
         return True, ""
 

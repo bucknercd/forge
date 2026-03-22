@@ -192,7 +192,7 @@ All non-demo modes need **`planner.llm_client`** set in `forge-policy.json` (typ
 
 - Forge action: `write_file <rel_path> | <body>` (use `\n` in the body for newlines).  
   Allowed prefixes: `examples/`, `src/`, `scripts/`, `tests/`.
-- Validation: `path_file_contains <rel_path> <substring>` (substring is the rest of the line).
+- Validation: `path_file_contains <rel_path> <substring>` (substring is the rest of the line). Wrap the substring in `'...'` or `"..."` when it would be token-split by whitespace; outer quotes are stripped and are **not** part of the search text.
 
 **Bounded edits vs `write_file`**
 
