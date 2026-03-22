@@ -4,6 +4,7 @@ import shlex
 import subprocess
 from typing import Any
 
+from forge.paths import Paths
 from forge.run_events import VALIDATION_COMPLETED, VALIDATION_STARTED, as_emitter
 from forge.validator import Validator
 
@@ -68,6 +69,7 @@ def run_gates_for_milestone(
                     text=True,
                     timeout=timeout_seconds,
                     check=False,
+                    cwd=str(Paths.BASE_DIR),
                 )
                 output = (proc.stdout or "") + (proc.stderr or "")
                 max_len = output_max_chars
@@ -127,6 +129,47 @@ def run_gates_for_milestone(
                     message=msg,
                 )
 
+    return results
+
+
+def run_validation_and_test_commands(
+    milestone_id: int,
+    *,
+    run_validation_gate: bool,
+    test_commands: list[str],
+    timeout_seconds: int = 120,
+    output_max_chars: int = 1200,
+    event_bus: Any = None,
+) -> list[dict[str, Any]]:
+    """
+    Run milestone validation (optional) then each test command as its own gate.
+    ``test_commands`` entries may be empty strings (skipped).
+    """
+    results: list[dict[str, Any]] = []
+    if run_validation_gate:
+        results.extend(
+            run_gates_for_milestone(
+                milestone_id,
+                run_validation_gate=True,
+                test_command=None,
+                timeout_seconds=timeout_seconds,
+                output_max_chars=output_max_chars,
+                event_bus=event_bus,
+            )
+        )
+    for cmd in test_commands:
+        if not (cmd or "").strip():
+            continue
+        results.extend(
+            run_gates_for_milestone(
+                milestone_id,
+                run_validation_gate=False,
+                test_command=cmd.strip(),
+                timeout_seconds=timeout_seconds,
+                output_max_chars=output_max_chars,
+                event_bus=event_bus,
+            )
+        )
     return results
 
 

@@ -56,6 +56,8 @@ def serialize_apply_plan_result(payload: dict[str, Any]) -> dict[str, Any]:
         "ok": bool(payload.get("ok", False)),
         "apply_ok": bool(payload.get("apply_ok", payload.get("ok", False))),
         "gates_ok": bool(payload.get("gates_ok", True)),
+        "repair_attempts_used": payload.get("repair_attempts_used"),
+        "orchestration": payload.get("orchestration"),
         "plan_id": payload.get("plan_id"),
         "planner_mode": payload.get("planner_mode", "deterministic"),
         "planner_metadata": payload.get("planner_metadata", {}),

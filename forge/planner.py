@@ -15,7 +15,9 @@ class Planner:
     mode = "deterministic"
     stable_for_recheck = True
 
-    def build_plan(self, milestone: Milestone) -> ExecutionPlan:
+    def build_plan(
+        self, milestone: Milestone, *, repair_context: dict | None = None
+    ) -> ExecutionPlan:
         raise NotImplementedError
 
     def metadata(self) -> dict:
@@ -31,7 +33,10 @@ class DeterministicPlanner(Planner):
     mode = "deterministic"
     stable_for_recheck = True
 
-    def build_plan(self, milestone: Milestone) -> ExecutionPlan:
+    def build_plan(
+        self, milestone: Milestone, *, repair_context: dict | None = None
+    ) -> ExecutionPlan:
+        _ = repair_context  # deterministic plans ignore prior failure context
         return ExecutionPlanBuilder.build(milestone)
 
 
@@ -42,8 +47,14 @@ class LLMPlanner(Planner):
     stable_for_recheck: bool = False
     fallback_to_milestone_actions: bool = True
 
-    def build_plan(self, milestone: Milestone) -> ExecutionPlan:
+    def build_plan(
+        self, milestone: Milestone, *, repair_context: dict | None = None
+    ) -> ExecutionPlan:
         prompt = _build_llm_plan_prompt(milestone)
+        if repair_context:
+            from forge.task_feedback import repair_context_to_prompt_appendix
+
+            prompt += repair_context_to_prompt_appendix(repair_context)
         raw = self.llm_client.generate(prompt)
         actions_raw = _parse_llm_actions(
             raw,

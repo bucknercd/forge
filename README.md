@@ -47,6 +47,34 @@ Working system — code + updated specs, validated
 
 **`forge vertical-slice`** materializes docs, **ensures tasks** for milestone **1**, saves a reviewed plan for the **next pending task**, applies it, and runs gates. **`forge milestone-preview`** without **`--task`** lists tasks and asks you to pick one; with **`--task`** it previews that execution unit. **`forge execute-next`** runs the **next milestone’s next pending task** (multi-task milestones may need several **`execute-next`** runs). See **[Milestones vs tasks](#milestones-vs-tasks-two-layer-planning)** and **[Why tasks are required](#why-tasks-are-required)**.
 
+### Artifact tests & bounded repair (unified execution)
+
+These commands share the **same task-scoped repair orchestration** (via `Executor.run_task_apply_with_repair_loop`):
+
+- **`forge execute-next`**
+- **`forge milestone-apply-plan <plan_id>`** (first attempt applies **that** reviewed plan; later attempts save new `m<id>-t<task>-<hash>` plans for the same task)
+- **`forge vertical-slice`** (apply stage)
+- **`forge workflow-guarded`** when it reaches the apply step
+
+The loop:
+
+1. **Save** a reviewed plan for the task when needed (`execute-next` and retries always save; **apply-plan / vertical-slice / workflow** reuse the plan id from the prior preview/save step on the **first** attempt only).
+2. **Apply** implementation actions (post-apply gates are **deferred** and run in the batch below).
+3. **Generate** (when enabled) a **targeted pytest file** under `tests/forge_generated/` from the task’s Forge Validation lines and `write_file` targets—**skipped with an explicit reason** when no heuristic applies.
+4. Run **Forge milestone validation** when enabled (`execute-next` always runs it; **`milestone-apply-plan`** / workflow / vertical-slice follow **`reviewed_plan_apply.run_validation_gate`** and CLI `--gate-validate` / `--no-gate-validate`), then **pytest on the generated file** (if any), then optional **`reviewed_plan_apply.test_command`**.
+5. **On success** → mark the task complete. **On failure** → persist structured feedback under **`.system/task_feedback/`** and **re-plan the same task**. **Deterministic** planner → **one** attempt; **LLM** mode uses feedback until **`task_execution.max_repair_attempts`** (default **3**, cap **20**). **`execute-next`** still updates roadmap **retry/failed** state on exhaustion; **apply-plan** / **vertical-slice** / **workflow** do not move the milestone state machine on failure (the task simply stays incomplete).
+
+Configure in **`forge-policy.json`**:
+
+```json
+{
+  "task_execution": {
+    "artifact_test_generation": true,
+    "max_repair_attempts": 3
+  }
+}
+```
+
 ---
 
 ## Quick Start (vertical slice)

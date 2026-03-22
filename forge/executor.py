@@ -1,8 +1,13 @@
 from datetime import datetime
 import json
+import re
+import shlex
+import sys
 import collections
+from pathlib import Path
+from typing import Any
 from forge.paths import Paths
-from forge.design_manager import MilestoneService
+from forge.design_manager import Milestone, MilestoneService
 from forge.run_history import RunHistory
 from forge.models import RunHistoryEntry
 from forge.validator import Validator
@@ -14,7 +19,20 @@ from forge.milestone_state import MilestoneStateRepository
 from forge.execution.models import ActionAddDecision, ApplyResult, ExecutionPlan
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.apply import ArtifactActionApplier
-from forge.gate_runner import run_gates_for_milestone, summarize_gate_results
+from forge.artifact_test_gen import ArtifactTestGenResult, generate_artifact_tests_for_task
+from forge.gate_runner import (
+    run_gates_for_milestone,
+    run_validation_and_test_commands,
+    summarize_gate_results,
+)
+from forge.planner_resolver import resolve_planner
+from forge.policy_config import (
+    ReviewedApplyPolicy,
+    TaskExecutionPolicy,
+    load_reviewed_apply_policy,
+    load_task_execution_policy,
+)
+from forge.task_feedback import build_repair_context, persist_task_feedback
 from forge.run_events import (
     PHASE_COMPLETED,
     PHASE_STARTED,
@@ -38,6 +56,16 @@ from forge.task_service import (
 )
 
 MAX_RETRIES = 2
+
+
+def _task_id_from_saved_plan(plan_id: str, payload: dict[str, Any]) -> int | None:
+    raw = payload.get("task_id")
+    if raw is not None:
+        return int(raw)
+    m = re.match(r"^m\d+-t(\d+)-", plan_id)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 def _plan_has_add_decision(plan: ExecutionPlan) -> bool:
@@ -107,6 +135,41 @@ def _planner_warnings(planner_meta: dict, plan: ExecutionPlan) -> list[str]:
                 f"LLM plan includes {body_empty} action(s) with empty anchor/body/markers."
             )
     return warnings
+
+
+def _mark_task_done_and_maybe_milestone(
+    milestone_id: int,
+    task_id: int,
+    *,
+    parent_milestone: Milestone,
+    reviewed_plan: ExecutionPlan,
+    success_summary: str,
+) -> None:
+    """Persist task completion and milestone roadmap state when all tasks are done."""
+    set_task_status(milestone_id, task_id, TASK_STATUS_COMPLETED)
+    if all_tasks_completed(milestone_id):
+        sync_state = Executor._load_milestone_state_file()
+        for k in list(sync_state.keys()):
+            sync_state[k] = normalize_milestone_state_value(sync_state.get(k))
+        ms_done = normalize_milestone_state_value(
+            sync_state.get(str(milestone_id))
+        )
+        ms_done["status"] = "completed"
+        sync_state[str(milestone_id)] = ms_done
+        Executor._write_milestone_state_file(sync_state)
+        if not _plan_has_add_decision(reviewed_plan):
+            DecisionTracker.append_milestone_success_decision(
+                milestone_id=milestone_id,
+                milestone_title=parent_milestone.title,
+                summary=success_summary,
+            )
+        entry = RunHistoryEntry(
+            task=f"Execute milestone {milestone_id} (all tasks complete)",
+            summary=f"{parent_milestone.title}: all tasks applied",
+            status="completed",
+            timestamp=datetime.now(),
+        )
+        RunHistory.log_run(entry)
 
 
 class Executor:
@@ -233,15 +296,353 @@ class Executor:
         Executor._write_milestone_state_file(state)
 
     @staticmethod
+    def run_task_apply_with_repair_loop(
+        milestone_id: int,
+        task_id: int,
+        milestone: Milestone,
+        *,
+        planner: Planner,
+        apply_policy: ReviewedApplyPolicy,
+        task_exec_policy: TaskExecutionPolicy,
+        run_milestone_validation: bool,
+        initial_plan_id: str | None = None,
+        review_enforcement: dict[str, Any] | None = None,
+        event_bus: Any | None = None,
+        finalize_milestone_state_on_failure: bool = False,
+        milestone_state: dict[str, Any] | None = None,
+        state: dict[str, Any] | None = None,
+        state_file: Path | None = None,
+    ) -> dict[str, Any]:
+        """
+        Shared task orchestration used by ``execute-next``, ``milestone-apply-plan``,
+        workflow guarded apply, and ``vertical-slice``: apply (optional first attempt
+        uses a pre-saved reviewed plan id), artifact tests, validation/test batch,
+        bounded replans with feedback.
+        """
+        result_path = Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json"
+
+        def _maybe_finalize(reason: str) -> None:
+            if (
+                finalize_milestone_state_on_failure
+                and milestone_state is not None
+                and state is not None
+                and state_file is not None
+            ):
+                Executor._finalize_failed_or_retry(
+                    milestone_id,
+                    milestone,
+                    milestone_state,
+                    state,
+                    state_file,
+                    result_path,
+                    reason=reason,
+                )
+
+        max_rep = task_exec_policy.max_repair_attempts
+        if planner.mode == "deterministic":
+            max_rep = 1
+
+        task = get_task(milestone_id, task_id)
+        if not task:
+            msg = f"Task {task_id} not found for milestone {milestone_id}."
+            _maybe_finalize(msg)
+            return {"ok": False, "apply_ok": False, "message": msg}
+
+        parent_milestone = MilestoneService.get_milestone(milestone_id)
+        if not parent_milestone:
+            msg = "Parent milestone missing."
+            _maybe_finalize(msg)
+            return {"ok": False, "apply_ok": False, "message": msg}
+
+        repair_context: dict[str, Any] | None = None
+        last_message = ""
+        last_plan_id: str | None = None
+        last_gate_results: list[dict[str, Any]] = []
+
+        for attempt in range(1, max_rep + 1):
+            use_initial = bool(initial_plan_id and attempt == 1)
+            if use_initial:
+                payload0 = load_reviewed_plan(initial_plan_id)
+                if payload0 is None:
+                    msg = f"Reviewed plan '{initial_plan_id}' not found."
+                    _maybe_finalize(msg)
+                    return {
+                        "ok": False,
+                        "apply_ok": False,
+                        "message": msg,
+                        "plan_id": initial_plan_id,
+                        "repair_attempts_used": 0,
+                    }
+                mid_raw = payload0.get("milestone_id")
+                if mid_raw is None or int(mid_raw) != milestone_id:
+                    msg = "Reviewed plan milestone_id does not match."
+                    _maybe_finalize(msg)
+                    return {
+                        "ok": False,
+                        "apply_ok": False,
+                        "message": msg,
+                        "plan_id": initial_plan_id,
+                    }
+                tid = _task_id_from_saved_plan(initial_plan_id, payload0)
+                if tid is None or tid != task_id:
+                    msg = (
+                        "Reviewed plan is not scoped to this task "
+                        f"(expected task_id={task_id})."
+                    )
+                    return {
+                        "ok": False,
+                        "apply_ok": False,
+                        "message": msg,
+                        "plan_id": initial_plan_id,
+                    }
+                plan_id = initial_plan_id
+            else:
+                save = Executor.save_reviewed_plan_for_task(
+                    milestone_id,
+                    task_id,
+                    planner=planner,
+                    review_enforcement=review_enforcement,
+                    event_bus=event_bus,
+                    repair_context=repair_context,
+                )
+                if not save.get("ok"):
+                    last_message = save.get("message", "Plan save failed.")
+                    _maybe_finalize(last_message)
+                    return {
+                        "ok": False,
+                        "apply_ok": False,
+                        "message": last_message,
+                        "repair_attempts_used": attempt - 1,
+                    }
+                plan_id = save.get("plan_id")
+                if not plan_id:
+                    last_message = "No plan_id from save step."
+                    _maybe_finalize(last_message)
+                    return {
+                        "ok": False,
+                        "apply_ok": False,
+                        "message": last_message,
+                        "repair_attempts_used": attempt - 1,
+                    }
+
+            last_plan_id = plan_id
+            apply_res = Executor.apply_reviewed_plan_with_gates(
+                plan_id,
+                run_validation_gate=False,
+                test_command=None,
+                test_timeout_seconds=apply_policy.test_timeout_seconds,
+                test_output_max_chars=apply_policy.test_output_max_chars,
+                mark_task_complete=False,
+                record_milestone_attempt=False,
+                defer_post_apply_gates=True,
+                event_bus=event_bus,
+            )
+
+            if not apply_res.get("apply_ok"):
+                last_message = apply_res.get("message") or "Apply failed."
+                persist_task_feedback(
+                    milestone_id,
+                    task_id,
+                    attempt,
+                    {
+                        "phase": "apply",
+                        "plan_id": plan_id,
+                        "apply_ok": False,
+                        "errors": apply_res.get("errors", []),
+                    },
+                )
+                repair_context = build_repair_context(
+                    milestone_id,
+                    task_id,
+                    attempt,
+                    apply_ok=False,
+                    apply_errors=list(apply_res.get("errors") or []),
+                    gate_results=None,
+                )
+                continue
+
+            if task_exec_policy.artifact_test_generation:
+                gen = generate_artifact_tests_for_task(
+                    milestone_id, task_id, task
+                )
+            else:
+                gen = ArtifactTestGenResult(
+                    generated=False,
+                    rel_path=None,
+                    message=(
+                        "Artifact test generation disabled in forge-policy.json "
+                        "(task_execution.artifact_test_generation=false)."
+                    ),
+                    skipped_reason="policy_disabled",
+                )
+
+            test_commands: list[str] = []
+            if gen.generated and gen.rel_path:
+                test_commands.append(
+                    f"{shlex.quote(sys.executable)} -m pytest "
+                    f"{shlex.quote(gen.rel_path)}"
+                )
+            if apply_policy.test_command:
+                test_commands.append(apply_policy.test_command)
+
+            gates = run_validation_and_test_commands(
+                milestone_id,
+                run_validation_gate=run_milestone_validation,
+                test_commands=test_commands,
+                timeout_seconds=apply_policy.test_timeout_seconds,
+                output_max_chars=apply_policy.test_output_max_chars,
+                event_bus=event_bus,
+            )
+            last_gate_results = gates
+            gates_ok = all(g.get("ok") for g in gates) if gates else True
+
+            if not gates_ok:
+                last_message = (
+                    apply_res.get("message")
+                    or summarize_gate_results(gates)
+                    or "Validation or tests failed."
+                )
+                persist_task_feedback(
+                    milestone_id,
+                    task_id,
+                    attempt,
+                    {
+                        "phase": "gates",
+                        "plan_id": plan_id,
+                        "artifact_test": {
+                            "generated": gen.generated,
+                            "rel_path": gen.rel_path,
+                            "skipped_reason": gen.skipped_reason,
+                            "message": gen.message,
+                        },
+                        "gate_results": gates,
+                    },
+                )
+                repair_context = build_repair_context(
+                    milestone_id,
+                    task_id,
+                    attempt,
+                    apply_ok=True,
+                    apply_errors=[],
+                    gate_results=gates,
+                    artifact_test_path=gen.rel_path,
+                    extra_message=None
+                    if gen.generated
+                    else gen.message,
+                )
+                continue
+
+            payload = load_reviewed_plan(plan_id)
+            if payload is None:
+                last_message = f"Reviewed plan '{plan_id}' missing after apply."
+                _maybe_finalize(last_message)
+                return {
+                    "ok": False,
+                    "apply_ok": False,
+                    "message": last_message,
+                    "plan_id": plan_id,
+                    "repair_attempts_used": attempt,
+                }
+
+            reviewed_plan = ExecutionPlan.from_serializable(payload["plan"])
+            gate_summary = summarize_gate_results(gates)
+            success_summary = (
+                f"Applied {len(reviewed_plan.actions)} planned action(s). "
+                f"{apply_res.get('artifact_summary', '')}; gates: {gate_summary}"
+            )
+            _mark_task_done_and_maybe_milestone(
+                milestone_id,
+                task_id,
+                parent_milestone=parent_milestone,
+                reviewed_plan=reviewed_plan,
+                success_summary=success_summary,
+            )
+            RunHistory.log_milestone_attempt(
+                milestone_id=milestone_id,
+                milestone_title=milestone.title,
+                status="success",
+                artifact_summary=f"{apply_res.get('artifact_summary', '')}; gates: {gate_summary}",
+            )
+            done_msg = (
+                f"Artifact tests: {gen.rel_path}"
+                if gen.generated
+                else gen.message
+            )
+            out = dict(apply_res)
+            pol = dict(apply_res.get("policy", {}))
+            pol["run_validation_gate"] = run_milestone_validation
+            pol["test_command"] = apply_policy.test_command
+            pol["test_timeout_seconds"] = apply_policy.test_timeout_seconds
+            pol["test_output_max_chars"] = apply_policy.test_output_max_chars
+            out.update(
+                {
+                    "ok": True,
+                    "apply_ok": True,
+                    "gates_ok": True,
+                    "plan_id": plan_id,
+                    "policy": pol,
+                    "gate_results": gates,
+                    "gate_summary": gate_summary,
+                    "repair_attempts_used": attempt,
+                    "message": (
+                        f"Task {task_id} completed (attempt {attempt}/{max_rep}). "
+                        f"{done_msg}"
+                    ).strip(),
+                    "orchestration": "task_repair_loop",
+                }
+            )
+            return out
+
+        final_reason = (
+            f"Task {task_id} failed after {max_rep} repair attempt(s): {last_message}"
+        )
+        _maybe_finalize(final_reason)
+        return {
+            "ok": False,
+            "apply_ok": False,
+            "gates_ok": False,
+            "plan_id": last_plan_id,
+            "message": final_reason,
+            "repair_attempts_used": max_rep,
+            "gate_results": last_gate_results,
+            "gate_summary": summarize_gate_results(last_gate_results)
+            if last_gate_results
+            else "",
+            "policy": {
+                "run_validation_gate": run_milestone_validation,
+                "test_command": apply_policy.test_command,
+                "test_timeout_seconds": apply_policy.test_timeout_seconds,
+                "test_output_max_chars": apply_policy.test_output_max_chars,
+                "defer_post_apply_gates": True,
+                "mark_task_complete": False,
+                "record_milestone_attempt": False,
+            },
+            "orchestration": "task_repair_loop",
+        }
+
+    @staticmethod
+    def task_ids_for_reviewed_plan(plan_id: str) -> tuple[int, int] | None:
+        """Return ``(milestone_id, task_id)`` for a task-scoped reviewed plan, or ``None``."""
+        payload = load_reviewed_plan(plan_id)
+        if payload is None:
+            return None
+        mid_raw = payload.get("milestone_id")
+        if mid_raw is None:
+            return None
+        tid = _task_id_from_saved_plan(plan_id, payload)
+        if tid is None:
+            return None
+        return int(mid_raw), tid
+
+    @staticmethod
     def _execute_next_task_step(
         milestone_id: int,
         milestone,
         task_id: int,
     ) -> dict:
         """
-        Apply the next task using a saved reviewed plan (deterministic save + apply + gates).
-        Updates milestone state on failure; successful task completion is recorded in
-        ``apply_reviewed_plan_with_gates``.
+        Milestone roadmap + selector preamble, then
+        :meth:`run_task_apply_with_repair_loop` (execute-next repair semantics).
         """
         state_file = Paths.SYSTEM_DIR / "milestone_state.json"
         state = Executor._load_milestone_state_file()
@@ -289,59 +690,76 @@ class Executor:
         )
         RunHistory.log_run(entry)
 
-        save = Executor.save_reviewed_plan_for_task(
+        result_path = Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json"
+
+        planner, _planner_policy, planner_err = resolve_planner(None)
+        if planner is None:
+            msg = planner_err or "Could not resolve planner from forge-policy.json."
+            Executor._finalize_failed_or_retry(
+                milestone_id,
+                milestone,
+                milestone_state,
+                state,
+                state_file,
+                result_path,
+                reason=msg,
+            )
+            return {"apply_ok": False, "message": msg}
+
+        apply_policy, apply_policy_err = load_reviewed_apply_policy()
+        if apply_policy_err:
+            Executor._finalize_failed_or_retry(
+                milestone_id,
+                milestone,
+                milestone_state,
+                state,
+                state_file,
+                result_path,
+                reason=apply_policy_err,
+            )
+            return {"apply_ok": False, "message": apply_policy_err}
+
+        task_exec_policy, task_exec_err = load_task_execution_policy()
+        if task_exec_err:
+            Executor._finalize_failed_or_retry(
+                milestone_id,
+                milestone,
+                milestone_state,
+                state,
+                state_file,
+                result_path,
+                reason=task_exec_err,
+            )
+            return {"apply_ok": False, "message": task_exec_err}
+
+        loop_out = Executor.run_task_apply_with_repair_loop(
             milestone_id,
             task_id,
-            planner=DeterministicPlanner(),
+            milestone,
+            planner=planner,
+            apply_policy=apply_policy,
+            task_exec_policy=task_exec_policy,
+            run_milestone_validation=True,
+            initial_plan_id=None,
+            review_enforcement=None,
+            event_bus=None,
+            finalize_milestone_state_on_failure=True,
+            milestone_state=milestone_state,
+            state=state,
+            state_file=state_file,
         )
-        if not save.get("ok"):
-            Executor._finalize_failed_or_retry(
-                milestone_id,
-                milestone,
-                milestone_state,
-                state,
-                state_file,
-                Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json",
-                reason=save.get("message", "Plan save failed."),
-            )
+        if loop_out.get("apply_ok"):
             return {
-                "apply_ok": False,
-                "message": save.get("message", "Plan save failed."),
+                "apply_ok": True,
+                "message": loop_out.get("message", ""),
+                "repair_attempts_used": loop_out.get("repair_attempts_used"),
+                "last_plan_id": loop_out.get("plan_id"),
             }
-
-        plan_id = save.get("plan_id")
-        if not plan_id:
-            Executor._finalize_failed_or_retry(
-                milestone_id,
-                milestone,
-                milestone_state,
-                state,
-                state_file,
-                Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json",
-                reason="No plan_id from save step.",
-            )
-            return {"apply_ok": False, "message": "No plan_id from save step."}
-
-        apply_res = Executor.apply_reviewed_plan_with_gates(
-            plan_id,
-            run_validation_gate=True,
-            test_command=None,
-        )
-
-        if not apply_res.get("ok"):
-            err = apply_res.get("message") or "Apply or gates failed."
-            Executor._finalize_failed_or_retry(
-                milestone_id,
-                milestone,
-                milestone_state,
-                state,
-                state_file,
-                Paths.SYSTEM_DIR / "results" / f"milestone_{milestone_id}.json",
-                reason=err,
-            )
-            return {"apply_ok": False, "message": err}
-
-        return {"apply_ok": True, "message": apply_res.get("message", "")}
+        return {
+            "apply_ok": False,
+            "message": loop_out.get("message", ""),
+            "repair_attempts_used": loop_out.get("repair_attempts_used"),
+        }
 
     @staticmethod
     def preview_milestone(
@@ -349,6 +767,7 @@ class Executor:
         planner: Planner | None = None,
         *,
         task_id: int | None = None,
+        repair_context: dict | None = None,
     ) -> dict:
         """
         Build and simulate an execution plan for a **task** under the milestone.
@@ -397,7 +816,9 @@ class Executor:
 
         planner = planner or DeterministicPlanner()
         try:
-            plan = planner.build_plan(milestone)
+            plan = planner.build_plan(
+                milestone, repair_context=repair_context
+            )
             _ = ExecutionPlanBuilder.parse_validation_rules(milestone)
         except ValueError as exc:
             return {"ok": False, "message": str(exc), "milestone_id": milestone_id}
@@ -431,6 +852,8 @@ class Executor:
         planner: Planner | None = None,
         review_enforcement: dict | None = None,
         event_bus: object | None = None,
+        *,
+        repair_context: dict | None = None,
     ) -> dict:
         """Preview/save a reviewed plan built from a task under ``milestone_id``."""
         ens = ensure_tasks_for_milestone(milestone_id)
@@ -441,7 +864,10 @@ class Executor:
             }
         planner = planner or DeterministicPlanner()
         preview = Executor.preview_milestone(
-            milestone_id, planner=planner, task_id=task_id
+            milestone_id,
+            planner=planner,
+            task_id=task_id,
+            repair_context=repair_context,
         )
         if not preview.get("ok"):
             return preview
@@ -534,6 +960,9 @@ class Executor:
         test_timeout_seconds: int = 120,
         test_output_max_chars: int = 1200,
         event_bus: object | None = None,
+        mark_task_complete: bool = True,
+        record_milestone_attempt: bool = True,
+        defer_post_apply_gates: bool = False,
     ) -> dict:
         bus = as_emitter(event_bus)
         payload = load_reviewed_plan(plan_id)
@@ -617,56 +1046,52 @@ class Executor:
             milestone_result_payload["task_id"] = task_id
         with milestone_result_file.open("w", encoding="utf-8") as file:
             json.dump(milestone_result_payload, file, indent=4)
-        run_any_gate = bool(run_validation_gate or test_command)
-        if run_any_gate:
-            bus.emit(PHASE_STARTED, phase="validation", label="post-apply gates")
-        gates = run_gates_for_milestone(
-            milestone_id,
-            run_validation_gate=run_validation_gate,
-            test_command=test_command,
-            timeout_seconds=test_timeout_seconds,
-            output_max_chars=test_output_max_chars,
-            event_bus=bus,
+        run_any_gate = bool(
+            not defer_post_apply_gates and (run_validation_gate or test_command)
         )
-        gates_ok = all(g.get("ok") for g in gates) if gates else True
-        if run_any_gate:
-            bus.emit(
-                PHASE_COMPLETED,
-                phase="validation",
-                ok=gates_ok,
-                message=summarize_gate_results(gates),
+        if defer_post_apply_gates:
+            gates = [
+                {
+                    "name": "post_apply_gates_deferred",
+                    "ok": True,
+                    "message": "Post-apply gates deferred (run by task orchestration).",
+                    "details": {},
+                }
+            ]
+            gates_ok = True
+        else:
+            if run_any_gate:
+                bus.emit(PHASE_STARTED, phase="validation", label="post-apply gates")
+            gates = run_gates_for_milestone(
+                milestone_id,
+                run_validation_gate=run_validation_gate,
+                test_command=test_command,
+                timeout_seconds=test_timeout_seconds,
+                output_max_chars=test_output_max_chars,
+                event_bus=bus,
             )
+            gates_ok = all(g.get("ok") for g in gates) if gates else True
+            if run_any_gate:
+                bus.emit(
+                    PHASE_COMPLETED,
+                    phase="validation",
+                    ok=gates_ok,
+                    message=summarize_gate_results(gates),
+                )
         ok_final = apply_ok and gates_ok
         gate_summary = summarize_gate_results(gates)
         artifact_summary = apply_result.human_summary()
 
-        if task_id is not None and ok_final:
-            set_task_status(milestone_id, task_id, TASK_STATUS_COMPLETED)
-            if all_tasks_completed(milestone_id):
-                sync_state = Executor._load_milestone_state_file()
-                for k in list(sync_state.keys()):
-                    sync_state[k] = normalize_milestone_state_value(sync_state.get(k))
-                ms_done = normalize_milestone_state_value(
-                    sync_state.get(str(milestone_id))
-                )
-                ms_done["status"] = "completed"
-                sync_state[str(milestone_id)] = ms_done
-                Executor._write_milestone_state_file(sync_state)
-                if not _plan_has_add_decision(reviewed_plan):
-                    DecisionTracker.append_milestone_success_decision(
-                        milestone_id=milestone_id,
-                        milestone_title=milestone.title,
-                        summary=_build_execution_summary(
-                            len(reviewed_plan.actions), apply_result
-                        ),
-                    )
-                entry = RunHistoryEntry(
-                    task=f"Execute milestone {milestone_id} (all tasks complete)",
-                    summary=f"{milestone.title}: all tasks applied",
-                    status="completed",
-                    timestamp=datetime.now(),
-                )
-                RunHistory.log_run(entry)
+        if task_id is not None and ok_final and mark_task_complete:
+            _mark_task_done_and_maybe_milestone(
+                milestone_id,
+                task_id,
+                parent_milestone=milestone,
+                reviewed_plan=reviewed_plan,
+                success_summary=_build_execution_summary(
+                    len(reviewed_plan.actions), apply_result
+                ),
+            )
 
         result_payload = {
             "kind": "reviewed_plan_apply",
@@ -688,6 +1113,9 @@ class Executor:
                 "test_command": test_command,
                 "test_timeout_seconds": test_timeout_seconds,
                 "test_output_max_chars": test_output_max_chars,
+                "defer_post_apply_gates": defer_post_apply_gates,
+                "mark_task_complete": mark_task_complete,
+                "record_milestone_attempt": record_milestone_attempt,
             },
             "files_changed": apply_result.normalized_files_changed(),
             "actions_applied": apply_result.actions_applied,
@@ -706,13 +1134,14 @@ class Executor:
         elif not gates_ok:
             failed_msgs = [g.get("message", "") for g in gates if not g.get("ok")]
             err = "; ".join(failed_msgs) or "Post-apply gate failure."
-        RunHistory.log_milestone_attempt(
-            milestone_id=milestone_id,
-            milestone_title=milestone.title,
-            status=status,
-            error_message=err,
-            artifact_summary=f"{artifact_summary}; gates: {gate_summary}",
-        )
+        if record_milestone_attempt:
+            RunHistory.log_milestone_attempt(
+                milestone_id=milestone_id,
+                milestone_title=milestone.title,
+                status=status,
+                error_message=err,
+                artifact_summary=f"{artifact_summary}; gates: {gate_summary}",
+            )
 
         ret = {
             "ok": ok_final,
@@ -732,6 +1161,9 @@ class Executor:
                 "test_command": test_command,
                 "test_timeout_seconds": test_timeout_seconds,
                 "test_output_max_chars": test_output_max_chars,
+                "defer_post_apply_gates": defer_post_apply_gates,
+                "mark_task_complete": mark_task_complete,
+                "record_milestone_attempt": record_milestone_attempt,
             },
             "files_changed": apply_result.normalized_files_changed(),
             "actions_applied": apply_result.actions_applied,

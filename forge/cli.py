@@ -28,6 +28,7 @@ from forge.cli_output import (
 from forge.policy_config import (
     ReviewedApplyPolicy,
     load_reviewed_apply_policy,
+    load_task_execution_policy,
     merge_reviewed_apply_policy,
 )
 from forge.planner_resolver import resolve_planner
@@ -834,12 +835,109 @@ class ForgeCLI:
                 print(msg)
             return False
 
-        result = Executor.apply_reviewed_plan_with_gates(
-            plan_id,
-            run_validation_gate=resolved_policy.run_validation_gate,
-            test_command=resolved_policy.test_command,
-            test_timeout_seconds=resolved_policy.test_timeout_seconds,
-            test_output_max_chars=resolved_policy.test_output_max_chars,
+        scope = Executor.task_ids_for_reviewed_plan(plan_id)
+        if scope is None:
+            msg = f"Reviewed plan '{plan_id}' not found."
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {"ok": False, "plan_id": plan_id, "message": msg, "errors": [msg]}
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(msg)
+            return False
+        milestone_id, task_id = scope
+        try:
+            milestone = MilestoneService.get_milestone(milestone_id)
+        except ValueError as exc:
+            msg = f"Milestone definition error: {exc}"
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {"ok": False, "plan_id": plan_id, "message": msg, "errors": [msg]}
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(msg)
+            return False
+        if not milestone:
+            msg = "Milestone for reviewed plan no longer exists."
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {"ok": False, "plan_id": plan_id, "message": msg, "errors": [msg]}
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(msg)
+            return False
+
+        planner, _, planner_err = resolve_planner(None)
+        if planner is None:
+            msg = planner_err or "Could not resolve planner from forge-policy.json."
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {"ok": False, "plan_id": plan_id, "message": msg, "errors": [msg]}
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(msg)
+            return False
+
+        task_exec_policy, task_exec_err = load_task_execution_policy()
+        if task_exec_err:
+            if json_mode:
+                print(
+                    json.dumps(
+                        serialize_apply_plan_result(
+                            {
+                                "ok": False,
+                                "plan_id": plan_id,
+                                "message": task_exec_err,
+                                "errors": [task_exec_err],
+                            }
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(task_exec_err)
+            return False
+
+        result = Executor.run_task_apply_with_repair_loop(
+            milestone_id,
+            task_id,
+            milestone,
+            planner=planner,
+            apply_policy=resolved_policy,
+            task_exec_policy=task_exec_policy,
+            run_milestone_validation=resolved_policy.run_validation_gate,
+            initial_plan_id=plan_id,
+            review_enforcement=None,
+            event_bus=None,
+            finalize_milestone_state_on_failure=False,
+            milestone_state=None,
+            state=None,
+            state_file=None,
         )
         result["review_enforcement"] = result.get("review_enforcement", {})
         if json_mode:
@@ -849,6 +947,9 @@ class ForgeCLI:
             print(result.get("message", "Failed to apply reviewed plan."))
             if result.get("gate_summary"):
                 print(f"Gates: {result['gate_summary']}")
+            ra = result.get("repair_attempts_used")
+            if ra is not None:
+                print(f"Repair attempts used: {ra}")
             return False
         print(f"Applied reviewed plan: {result.get('plan_id')}")
         print(f"Milestone: {result.get('milestone_id')}. {result.get('title', '')}")
@@ -868,6 +969,9 @@ class ForgeCLI:
         print(f"Artifact Summary: {result.get('artifact_summary', '')}")
         if result.get("gate_summary"):
             print(f"Gates: {result.get('gate_summary')}")
+        ra = result.get("repair_attempts_used")
+        if ra is not None and ra > 1:
+            print(f"Repair attempts used: {ra}")
         files = result.get("files_changed", [])
         if files:
             print("Changed Artifacts:")
@@ -1099,12 +1203,62 @@ class ForgeCLI:
                     test_timeout_seconds=gate_test_timeout_seconds,
                     test_output_max_chars=gate_test_output_max_chars,
                 )
-                apply_res = Executor.apply_reviewed_plan_with_gates(
-                    latest_plan_id,
-                    run_validation_gate=resolved_policy.run_validation_gate,
-                    test_command=resolved_policy.test_command,
-                    test_timeout_seconds=resolved_policy.test_timeout_seconds,
-                    test_output_max_chars=resolved_policy.test_output_max_chars,
+                task_exec_policy, task_exec_err = load_task_execution_policy()
+                if task_exec_err:
+                    stages.append(
+                        {"stage": "apply_plan", "ok": False, "message": task_exec_err}
+                    )
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+                scope = Executor.task_ids_for_reviewed_plan(latest_plan_id)
+                if scope is None:
+                    stages.append(
+                        {
+                            "stage": "apply_plan",
+                            "ok": False,
+                            "message": f"Reviewed plan '{latest_plan_id}' not found.",
+                        }
+                    )
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+                am_id, at_id = scope
+                try:
+                    am_milestone = MilestoneService.get_milestone(am_id)
+                except ValueError as exc:
+                    stages.append(
+                        {"stage": "apply_plan", "ok": False, "message": str(exc)}
+                    )
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+                if not am_milestone:
+                    stages.append(
+                        {
+                            "stage": "apply_plan",
+                            "ok": False,
+                            "message": "Milestone for reviewed plan no longer exists.",
+                        }
+                    )
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+                apply_res = Executor.run_task_apply_with_repair_loop(
+                    am_id,
+                    at_id,
+                    am_milestone,
+                    planner=planner,
+                    apply_policy=resolved_policy,
+                    task_exec_policy=task_exec_policy,
+                    run_milestone_validation=resolved_policy.run_validation_gate,
+                    initial_plan_id=latest_plan_id,
+                    review_enforcement=enforcement,
+                    event_bus=None,
+                    finalize_milestone_state_on_failure=False,
+                    milestone_state=None,
+                    state=None,
+                    state_file=None,
                 )
                 stages.append({"stage": "apply_plan", **apply_res})
                 if not apply_res.get("ok"):

@@ -22,6 +22,7 @@ from forge.policy_config import (
     ReviewedApplyPolicy,
     load_planner_policy,
     load_reviewed_apply_policy,
+    load_task_execution_policy,
     merge_reviewed_apply_policy,
 )
 from forge.planner import Planner
@@ -703,13 +704,57 @@ def run_vertical_slice(
         bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
-    apply_res = Executor.apply_reviewed_plan_with_gates(
-        plan_id,
-        run_validation_gate=resolved.run_validation_gate,
-        test_command=resolved.test_command,
-        test_timeout_seconds=resolved.test_timeout_seconds,
-        test_output_max_chars=resolved.test_output_max_chars,
+    task_exec_policy, task_exec_err = load_task_execution_policy()
+    if task_exec_err:
+        stages.append({"stage": "apply_plan", "ok": False, "message": task_exec_err})
+        bus.emit(RUN_FAILED, reason=task_exec_err, phase="apply_plan")
+        bus.emit(RUN_COMPLETED, ok=False)
+        return _finalize(stages, ok=False)
+
+    scope = Executor.task_ids_for_reviewed_plan(plan_id)
+    if scope is None:
+        msg = f"Reviewed plan '{plan_id}' not found."
+        stages.append({"stage": "apply_plan", "ok": False, "message": msg})
+        bus.emit(RUN_FAILED, reason=msg, phase="apply_plan")
+        bus.emit(RUN_COMPLETED, ok=False)
+        return _finalize(stages, ok=False)
+    vm_id, vt_id = scope
+    try:
+        vm_milestone = MilestoneService.get_milestone(vm_id)
+    except ValueError as exc:
+        stages.append({"stage": "apply_plan", "ok": False, "message": str(exc)})
+        bus.emit(RUN_FAILED, reason=str(exc), phase="apply_plan")
+        bus.emit(RUN_COMPLETED, ok=False)
+        return _finalize(stages, ok=False)
+    if not vm_milestone:
+        msg = "Milestone for reviewed plan no longer exists."
+        stages.append({"stage": "apply_plan", "ok": False, "message": msg})
+        bus.emit(RUN_FAILED, reason=msg, phase="apply_plan")
+        bus.emit(RUN_COMPLETED, ok=False)
+        return _finalize(stages, ok=False)
+
+    bus.emit(PHASE_STARTED, phase="apply", label="apply reviewed plan (repair loop)")
+    apply_res = Executor.run_task_apply_with_repair_loop(
+        vm_id,
+        vt_id,
+        vm_milestone,
+        planner=planner,
+        apply_policy=resolved,
+        task_exec_policy=task_exec_policy,
+        run_milestone_validation=resolved.run_validation_gate,
+        initial_plan_id=plan_id,
+        review_enforcement=enforcement,
         event_bus=bus,
+        finalize_milestone_state_on_failure=False,
+        milestone_state=None,
+        state=None,
+        state_file=None,
+    )
+    bus.emit(
+        PHASE_COMPLETED,
+        phase="apply",
+        ok=bool(apply_res.get("ok")),
+        message=apply_res.get("message"),
     )
     stages.append({"stage": "apply_plan", **apply_res})
     ok = bool(apply_res.get("ok"))

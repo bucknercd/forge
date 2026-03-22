@@ -24,6 +24,19 @@ _LLM_CLIENT_IDS = frozenset({"stub", "openai"})
 
 
 @dataclass(frozen=True)
+class TaskExecutionPolicy:
+    """
+    Task-scoped execution: artifact pytest generation + bounded repair attempts.
+
+    Repair replanning is effective only when using an LLM planner; deterministic
+    mode still runs artifact tests / gates once.
+    """
+
+    artifact_test_generation: bool = True
+    max_repair_attempts: int = 3
+
+
+@dataclass(frozen=True)
 class PlannerPolicy:
     mode: str = "deterministic"  # deterministic | llm
     llm_client: str | None = None  # stub | openai
@@ -116,6 +129,37 @@ def load_planner_policy() -> tuple[PlannerPolicy, str | None]:
         llm_client=llm_client,
         llm_model=llm_model,
         require_review_for_nondeterministic=require_review,
+    ), None
+
+
+def load_task_execution_policy() -> tuple[TaskExecutionPolicy, str | None]:
+    path = policy_file_path()
+    if not path.exists():
+        return TaskExecutionPolicy(), None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return TaskExecutionPolicy(), f"Invalid policy JSON in {path}: {exc}"
+    if not isinstance(data, dict):
+        return TaskExecutionPolicy(), f"Invalid policy file {path}: top-level must be an object."
+    section = data.get("task_execution", {})
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        return (
+            TaskExecutionPolicy(),
+            f"Invalid policy file {path}: 'task_execution' must be an object.",
+        )
+    try:
+        gen = _get_bool(section, "artifact_test_generation", default=True)
+        max_rep = _get_positive_int(section, "max_repair_attempts", default=3)
+        if max_rep > 20:
+            raise ValueError("'max_repair_attempts' must be <= 20.")
+    except ValueError as exc:
+        return TaskExecutionPolicy(), f"Invalid policy file {path}: {exc}"
+    return TaskExecutionPolicy(
+        artifact_test_generation=gen,
+        max_repair_attempts=max_rep,
     ), None
 
 

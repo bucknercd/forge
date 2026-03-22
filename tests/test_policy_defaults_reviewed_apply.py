@@ -84,7 +84,8 @@ def test_cli_flags_override_config_defaults(tmp_path, monkeypatch, capsys):
                 "reviewed_plan_apply": {
                     "run_validation_gate": True,
                     "test_command": "python -c \"import sys; sys.exit(9)\"",
-                }
+                },
+                "task_execution": {"artifact_test_generation": False},
             },
             indent=2,
         ),
