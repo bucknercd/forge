@@ -363,7 +363,12 @@ class ArtifactActionApplier:
                 before=before,
                 after=after,
                 changed=changed,
-                extra={"rel_path": action.rel_path},
+                extra={
+                    "rel_path": action.rel_path,
+                    "noop": not changed,
+                    "bytes_before": len(before.encode("utf-8")),
+                    "bytes_after": len(after.encode("utf-8")),
+                },
                 event_bus=event_bus,
             )
             return

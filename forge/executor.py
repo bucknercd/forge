@@ -81,6 +81,62 @@ def _build_execution_summary(
     )
 
 
+def _persist_repair_loop_attempt_artifact(
+    *,
+    milestone_id: int,
+    task_id: int,
+    attempt: int,
+    plan_id: str,
+    apply_res: dict[str, Any],
+) -> Path | None:
+    """
+    Persist the reviewed plan snapshot and apply outcome for each repair-loop attempt
+    under ``.system/results/repair_attempts/`` for debugging (no-op vs rewrite, stale plan).
+    """
+    try:
+        root = Paths.SYSTEM_DIR / "results" / "repair_attempts"
+        root.mkdir(parents=True, exist_ok=True)
+        safe = plan_id.replace("/", "_").replace("\\", "_")[:200]
+        out_path = root / f"m{milestone_id}_t{task_id}_a{attempt:02d}_{safe}.json"
+        stored = load_reviewed_plan(plan_id)
+        wf_outcomes = [
+            {
+                "path": a.get("path"),
+                "rel_path": a.get("rel_path"),
+                "outcome": a.get("outcome"),
+                "noop": a.get("noop"),
+                "bytes_before": a.get("bytes_before"),
+                "bytes_after": a.get("bytes_after"),
+            }
+            for a in (apply_res.get("actions_applied") or [])
+            if a.get("type") == "write_file"
+        ]
+        summary: dict[str, Any] = {
+            "milestone_id": milestone_id,
+            "task_id": task_id,
+            "attempt": attempt,
+            "plan_id": plan_id,
+            "apply_ok": apply_res.get("apply_ok"),
+            "ok": apply_res.get("ok"),
+            "gates_ok": apply_res.get("gates_ok"),
+            "message": apply_res.get("message"),
+            "files_changed": apply_res.get("files_changed"),
+            "actions_applied": apply_res.get("actions_applied"),
+            "write_file_outcomes": wf_outcomes,
+            "result_artifact": apply_res.get("result_artifact"),
+        }
+        if stored:
+            summary["plan"] = stored.get("plan")
+            summary["planner_mode"] = stored.get("planner_mode")
+            summary["plan_hash"] = stored.get("plan_hash")
+            summary["milestones_file_hash"] = stored.get("milestones_file_hash")
+            summary["tasks_file_hash"] = stored.get("tasks_file_hash")
+        out_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+        return out_path
+    except Exception:
+        return None
+
+
 def _planner_warnings(planner_meta: dict, plan: ExecutionPlan) -> list[str]:
     warnings: list[str] = []
     if planner_meta.get("is_nondeterministic"):
@@ -437,6 +493,15 @@ class Executor:
                 defer_post_apply_gates=True,
                 event_bus=event_bus,
             )
+            rapath = _persist_repair_loop_attempt_artifact(
+                milestone_id=milestone_id,
+                task_id=task_id,
+                attempt=attempt,
+                plan_id=plan_id,
+                apply_res=apply_res,
+            )
+            if rapath is not None:
+                apply_res["repair_attempt_artifact"] = str(rapath)
 
             if not apply_res.get("apply_ok"):
                 last_message = apply_res.get("message") or "Apply failed."

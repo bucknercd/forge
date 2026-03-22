@@ -166,19 +166,21 @@ class MilestoneService:
             if stripped.startswith("- **"):
                 if current_chunks and current_start_line is not None:
                     lines.append(
-                        (current_start_line, "\n".join(current_chunks).strip())
+                        (current_start_line, "\n".join(current_chunks))
                     )
                 current_chunks = []
                 current_start_line = None
                 break
             if stripped:
                 saw_non_empty = True
-            if stripped.startswith("- ") and not stripped.startswith("- **"):
+            lstripped = line.lstrip()
+            if lstripped.startswith("- ") and not lstripped.startswith("- **"):
                 if current_chunks and current_start_line is not None:
                     lines.append(
-                        (current_start_line, "\n".join(current_chunks).strip())
+                        (current_start_line, "\n".join(current_chunks))
                     )
-                current_chunks = [stripped[2:].strip()]
+                # Text after "- " — preserve leading spaces in code/file bodies (do not strip).
+                current_chunks = [lstripped[2:]]
                 current_start_line = line_no
             elif stripped == "":
                 if current_chunks:
@@ -189,10 +191,10 @@ class MilestoneService:
                         f"Milestone {milestone_id} malformed {field} at line {line_no}: "
                         "continuation line before first '- ' list item."
                     )
-                current_chunks.append(stripped)
+                current_chunks.append(line.replace("\r", ""))
 
         if current_chunks and current_start_line is not None:
-            lines.append((current_start_line, "\n".join(current_chunks).strip()))
+            lines.append((current_start_line, "\n".join(current_chunks)))
 
         if saw_non_empty and not lines:
             raise ValueError(

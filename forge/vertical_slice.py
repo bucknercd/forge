@@ -109,19 +109,20 @@ def _repair_multiline_write_file_actions(md: str) -> tuple[str, list[str]]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        st = line.strip()
-        if st.startswith("- ") and not st.startswith("- **"):
-            text = st[2:].strip()
-            if text.startswith("write_file ") and "|" in text:
-                wf_head, rest = text.split("|", 1)
+        lstripped = line.lstrip()
+        if lstripped.startswith("- ") and not lstripped.startswith("- **"):
+            after_bullet = lstripped[2:]
+            if after_bullet.startswith("write_file ") and "|" in after_bullet:
+                wf_head, rest = after_bullet.split("|", 1)
                 wf_head = wf_head.strip()
-                first = rest.strip()
+                first = rest  # preserve leading/trailing spaces on first line of body
                 body_parts: list[str] = []
                 if first:
-                    body_parts.append(first)
+                    body_parts.append(first.replace("\r", ""))
                 j = i + 1
                 while j < len(lines):
-                    s2t = lines[j].strip()
+                    raw_next = lines[j].replace("\r", "")
+                    s2t = raw_next.strip()
                     if s2t.startswith("- **"):
                         break
                     if s2t.startswith("- ") and not s2t.startswith("- **"):
@@ -129,7 +130,7 @@ def _repair_multiline_write_file_actions(md: str) -> tuple[str, list[str]]:
                     if s2t == "":
                         body_parts.append("")
                     else:
-                        body_parts.append(s2t)
+                        body_parts.append(raw_next)
                     j += 1
                 if j > i + 1:
                     folded_any = True
