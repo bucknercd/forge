@@ -13,6 +13,7 @@ from forge.paths import Paths
 from forge.run_event_handlers import EventListCollector, JsonlRunLogHandler
 from forge.run_events import RunEventBus
 from forge.llm import LLMClient
+from forge.milestone_llm_quality import WeakMilestonePlanError
 from forge.vertical_slice import (
     MILESTONES_DOC_PATH,
     demo_bundle,
@@ -33,6 +34,23 @@ class _FakeVerticalSliceLLM(LLMClient):
 
     def generate(self, prompt: str) -> str:
         return json.dumps(self._payload)
+
+    @property
+    def client_id(self) -> str:
+        return "fake"
+
+
+class _FakeVerticalSliceSequenceLLM(LLMClient):
+    """Returns successive JSON payloads (weak plan retry integration)."""
+
+    def __init__(self, payloads: list[dict]) -> None:
+        self._payloads = payloads
+        self.calls = 0
+
+    def generate(self, prompt: str) -> str:
+        p = self._payloads[self.calls]
+        self.calls += 1
+        return json.dumps(p)
 
     @property
     def client_id(self) -> str:
@@ -178,11 +196,12 @@ def test_generate_bundle_from_llm_fixed_vision_uses_file_vision():
 
 ## Milestone 1: One
 
-- **Objective**: x
+- **Objective**: x — implements the authoritative multi-line vision.
 - **Scope**: y
 - **Validation**: z
 
 - **Forge Actions**:
+  - write_file examples/x.py | x\\n
   - mark_milestone_completed
 - **Forge Validation**:
   - path_file_contains examples/x.py x
@@ -253,9 +272,10 @@ def test_generate_bundle_from_llm_repairs_partial_milestone():
 
 - **Objective**: Do the thing.
 - **Forge Actions**:
+  - write_file examples/partial.py | pass\\n
   - mark_milestone_completed
 - **Forge Validation**:
-  - path_file_contains examples/x.py x
+  - path_file_contains examples/partial.py pass
 """
     client = _FakeVerticalSliceLLM(
         {
@@ -270,6 +290,120 @@ def test_generate_bundle_from_llm_repairs_partial_milestone():
     m = MilestoneService.parse_milestones(bundle.milestones_md)
     assert m[0].scope.strip()
     assert m[0].validation.strip()
+
+
+def test_generate_bundle_from_llm_retries_after_weak_first_payload():
+    idea = "Build logcheck, a small Python CLI for syslog analysis"
+    bad_ms = """# Milestones
+
+## Milestone 1: Project Setup
+
+- **Objective**: Initialize documentation markers only.
+- **Scope**: requirements Overview section.
+- **Validation**: Marker present.
+
+- **Forge Actions**:
+  - append_section requirements Overview | FORGE_INIT_MARKER
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements FORGE_INIT_MARKER
+"""
+    good_ms = """# Milestones
+
+## Milestone 1: Logcheck CLI skeleton
+
+- **Objective**: Add examples/logcheck.py implementing the logcheck CLI entrypoint.
+- **Scope**: Stdlib argparse under examples/ only.
+- **Validation**: Runnable module with def main.
+
+- **Forge Actions**:
+  - write_file examples/logcheck.py | import argparse\\ndef main():\\n    print('logcheck')\\n
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains examples/logcheck.py def main
+"""
+    shared_docs = {
+        "requirements_md": "# Requirements\n\nLogcheck filters syslog ERROR lines.\n",
+        "architecture_md": "# Architecture\n\nSingle-module CLI under examples/logcheck.py.\n",
+    }
+    client = _FakeVerticalSliceSequenceLLM(
+        [
+            {
+                "vision": "logcheck CLI",
+                **shared_docs,
+                "milestones_md": bad_ms,
+            },
+            {
+                "vision": "logcheck CLI",
+                **shared_docs,
+                "milestones_md": good_ms,
+            },
+        ]
+    )
+    bundle = generate_bundle_from_llm(idea, client)
+    assert client.calls == 2
+    assert "logcheck" in bundle.milestones_md.lower()
+    assert "examples/logcheck.py" in bundle.milestones_md
+
+
+def test_generate_bundle_from_llm_raises_after_two_weak_payloads():
+    weak_ms = """# Milestones
+
+## Milestone 1: Setup
+
+- **Objective**: o
+- **Scope**: s
+- **Validation**: v
+
+- **Forge Actions**:
+  - append_section requirements Overview | FORGE_INIT_MARKER
+  - mark_milestone_completed
+- **Forge Validation**:
+  - file_contains requirements FORGE_INIT_MARKER
+"""
+    payload = {
+        "vision": "v",
+        "requirements_md": "# R\n",
+        "architecture_md": "# A\n",
+        "milestones_md": weak_ms,
+    }
+    client = _FakeVerticalSliceSequenceLLM([payload, dict(payload)])
+    try:
+        generate_bundle_from_llm("idea", client)
+    except WeakMilestonePlanError:
+        assert client.calls == 2
+    else:
+        raise AssertionError("expected WeakMilestonePlanError")
+
+
+def test_generate_bundle_logcheck_single_payload_integration():
+    idea = "Build logcheck Python CLI to scan logs for ERROR lines"
+    ms = """# Milestones
+
+## Milestone 1: Implement logcheck core
+
+- **Objective**: Provide examples/logcheck.py CLI that reads log lines and filters ERROR.
+- **Scope**: Stdlib only; examples/ path.
+- **Validation**: path_file_contains checks for filtering logic.
+
+- **Forge Actions**:
+  - write_file examples/logcheck.py | import sys\\ndef main():\\n    print('logcheck')\\n
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains examples/logcheck.py logcheck
+"""
+    client = _FakeVerticalSliceLLM(
+        {
+            "vision": "logcheck tool",
+            "requirements_md": "# Requirements\n\nLogcheck CLI scans text for ERROR.\n",
+            "architecture_md": "# Architecture\n\nModule examples/logcheck.py.\n",
+            "milestones_md": ms,
+        }
+    )
+    bundle = generate_bundle_from_llm(idea, client)
+    lowered = bundle.milestones_md.lower()
+    assert "logcheck" in lowered
+    assert "error" in bundle.requirements_md.lower() or "error" in lowered
 
 
 def test_materialize_demo_bundle_parseable(tmp_path, monkeypatch):

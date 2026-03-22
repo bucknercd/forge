@@ -9,6 +9,7 @@ from typing import Any
 
 from forge.design_manager import MilestoneService
 from forge.llm import LLMClient
+from forge.milestone_llm_quality import weak_synthesized_json_plan_messages
 from forge.paths import Paths
 
 
@@ -40,20 +41,26 @@ def _doc_excerpt(path: Path, *, max_chars: int = 2000) -> str:
 
 
 def build_milestone_synthesis_prompt(*, desired_count: int) -> str:
+    vis = _doc_excerpt(Paths.VISION_FILE)
     req = _doc_excerpt(Paths.REQUIREMENTS_FILE)
     arch = _doc_excerpt(Paths.ARCHITECTURE_FILE)
     dec = _doc_excerpt(Paths.DECISIONS_FILE)
     existing = _doc_excerpt(Paths.MILESTONES_FILE)
     return (
         "Synthesize the next Forge milestones for this repository.\n"
+        "Milestones are roadmap units: each title/objective/scope/validation must describe REAL "
+        "product-building work implied by vision + requirements + architecture (features, modules, "
+        "tests, sample data)—not generic repo bootstrap, not placeholder-only text.\n"
         "Return ONLY valid JSON with exact shape:\n"
         "{\"milestones\":[{\"title\":\"...\",\"objective\":\"...\",\"scope\":\"...\",\"validation\":\"...\"}]}\n\n"
         "Constraints:\n"
         f"- Produce 1 to {desired_count} milestones.\n"
-        "- Keep each field concise and actionable.\n"
+        "- Re-use terminology from requirements/architecture (components, APIs, filenames, user goals).\n"
+        "- Each milestone must be independently understandable and testable from its validation field.\n"
         "- Do not include markdown, comments, or extra keys.\n"
-        "- The milestones must be independent from IDs; IDs are assigned by Forge.\n\n"
+        "- Milestones are independent from numeric IDs; Forge assigns IDs when merging into milestones.md.\n\n"
         "Repository context excerpts:\n"
+        f"=== vision.txt ===\n{vis}\n\n"
         f"=== requirements.md ===\n{req}\n\n"
         f"=== architecture.md ===\n{arch}\n\n"
         f"=== decisions.md ===\n{dec}\n\n"
@@ -201,6 +208,16 @@ def synthesize_milestones(
     prompt = build_milestone_synthesis_prompt(desired_count=desired_count)
     raw = llm_client.generate(prompt)
     milestones, warnings = parse_synthesized_milestones(raw, desired_count=desired_count)
+
+    req_excerpt = _doc_excerpt(Paths.REQUIREMENTS_FILE, max_chars=8000)
+    arch_excerpt = _doc_excerpt(Paths.ARCHITECTURE_FILE, max_chars=8000)
+    rejections = weak_synthesized_json_plan_messages(
+        milestones,
+        requirements_excerpt=req_excerpt,
+        architecture_excerpt=arch_excerpt,
+    )
+    if rejections:
+        raise ValueError("; ".join(rejections))
 
     existing = MilestoneService.list_milestones()
     quality_warnings = quality_warnings_for_synthesized(milestones, existing)

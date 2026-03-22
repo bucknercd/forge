@@ -35,6 +35,11 @@ from forge.run_events import (
     RUN_STARTED,
     as_emitter,
 )
+from forge.milestone_llm_quality import (
+    WeakMilestonePlanError,
+    normalize_milestone_markdown,
+    weak_parsed_milestone_plan_messages,
+)
 from forge.vision import VisionManager
 
 # Shown in errors (stable path under Forge project layout).
@@ -262,20 +267,43 @@ def repair_llm_milestones_md(md: str) -> tuple[str, list[str]]:
     return repaired, warnings
 
 
-def finalize_llm_milestones_md(raw_md: str) -> tuple[str, list[str]]:
+def finalize_llm_milestones_md(
+    raw_md: str,
+    *,
+    source_context: str | None = None,
+) -> tuple[str, list[str]]:
     """
-    Repair common LLM omissions, parse, and raise a clear error if still invalid.
+    Normalize headers, repair common LLM omissions, parse, and validate product quality.
+
+    Raises :class:`WeakMilestonePlanError` when markdown parses but the plan is bootstrap-only
+    or not grounded in ``source_context`` (idea or vision text).
+
     Returns ``(milestones_md_to_persist, repair_warnings)``.
     """
-    repaired, repair_warnings = repair_llm_milestones_md(raw_md)
+    normalized, norm_warnings = normalize_milestone_markdown(raw_md)
+    repaired, repair_warnings = repair_llm_milestones_md(normalized)
+    all_warnings = [*norm_warnings, *repair_warnings]
     try:
-        MilestoneService.parse_milestones(repaired)
+        parsed = MilestoneService.parse_milestones(repaired)
     except ValueError as exc:
         raise ValueError(
             f"{exc} See {MILESTONES_DOC_PATH} for the expected milestone shape; fix the "
             "markdown or re-run `forge vertical-slice` with a clearer idea/vision."
         ) from exc
-    return repaired, repair_warnings
+    weak = weak_parsed_milestone_plan_messages(parsed, idea_context=source_context)
+    if weak:
+        raise WeakMilestonePlanError(weak)
+    return repaired, all_warnings
+
+
+def _product_docs_rules_block() -> str:
+    return (
+        "Product grounding (requirements_md + architecture_md):\n"
+        "- requirements_md MUST describe concrete behavior for THIS product: commands, flags, inputs, "
+        "outputs, error cases. Name the tool or library from the idea/vision.\n"
+        "- architecture_md MUST name real modules or files (e.g. examples/<tool>.py) and how they interact.\n"
+        "- Avoid generic boilerplate ('the system shall be modular') with no tie to the user's artifact.\n\n"
+    )
 
 
 def _milestones_strict_example_block() -> str:
@@ -287,17 +315,17 @@ def _milestones_strict_example_block() -> str:
         "- **Objective**: one or more sentences: what this milestone delivers.\n"
         "- **Scope**: boundaries, tech constraints, files/areas touched.\n"
         "- **Validation**: how you will verify the milestone is complete (observable checks).\n\n"
-        "STRICT EXAMPLE (mirror this structure for Milestone 1 and any further milestones):\n"
+        "STRICT EXAMPLE (mirror structure; replace with work that matches the user's idea):\n"
         "# Milestones\n\n"
-        "## Milestone 1: Example title\n"
-        "- **Objective**: Ship a minimal runnable example under examples/.\n"
-        "- **Scope**: Single module; stdlib only; no new dependencies.\n"
-        "- **Validation**: Example file exists, runs with exit code 0, and contains the entrypoint.\n"
+        "## Milestone 1: Scaffold CLI entrypoint\n"
+        "- **Objective**: Add a runnable Python CLI module under examples/ for the named tool.\n"
+        "- **Scope**: Single file; argparse; stdlib only unless the idea demands otherwise.\n"
+        "- **Validation**: File exists, defines main/entrypoint, and --help runs.\n"
         "- **Forge Actions**:\n"
-        "  - write_file examples/example_app.py | def main():\\n    print('ok')\\n\n"
+        "  - write_file examples/sample_cli.py | import argparse\\ndef main():\\n    pass\\n\n"
         "  - mark_milestone_completed\n"
         "- **Forge Validation**:\n"
-        "  - path_file_contains examples/example_app.py def main\n\n"
+        "  - path_file_contains examples/sample_cli.py argparse\n\n"
     )
 
 
@@ -305,7 +333,14 @@ def _milestones_rules_block() -> str:
     return (
         _milestones_strict_example_block()
         + "Additional rules for milestones_md:\n"
-        "- Start with '# Milestones' then '## Milestone 1: <title>'.\n"
+        "- Start with '# Milestones' then '## Milestone 1: <title>' (numeric id + colon + title).\n"
+        "- Milestones must advance the USER'S product (code, tests, sample data), not repo housekeeping.\n"
+        "- Across the whole milestones_md, include at least one write_file or bounded edit under "
+        "examples/, src/, scripts/, or tests/ that implements the idea.\n"
+        "- FORBIDDEN as the primary plan: only append_section/replace_section into docs, "
+        "FORGE_INIT_MARKER, or mark_milestone_completed with no real code artifact.\n"
+        "- Use literal header lines '- **Forge Actions**:' and '- **Forge Validation**:' "
+        "(with colon). Sub-actions are markdown list items starting with two spaces then '- '.\n"
         "- Include '- **Forge Actions**:' with one or more actions using ONLY:\n"
         "  append_section, replace_section, write_file, insert_after_in_file, insert_before_in_file,\n"
         "  replace_text_in_file, replace_block_in_file, replace_lines_in_file, add_decision, mark_milestone_completed\n"
@@ -325,6 +360,7 @@ def _build_idea_prompt(idea: str) -> str:
         "Return ONLY JSON (no markdown fences) with this shape:\n"
         '{"vision": "<short string>", "requirements_md": "<markdown>", '
         '"architecture_md": "<markdown>", "milestones_md": "<markdown>"}\n\n'
+        + _product_docs_rules_block()
         + _milestones_rules_block()
         + f"User idea:\n{idea.strip()}\n"
     )
@@ -338,9 +374,20 @@ def _build_fixed_vision_prompt(vision: str) -> str:
         "Return ONLY JSON (no markdown fences) with this shape:\n"
         '{"requirements_md": "<markdown>", "architecture_md": "<markdown>", '
         '"milestones_md": "<markdown>"}\n\n'
+        + _product_docs_rules_block()
         + _milestones_rules_block()
         + "Authoritative vision:\n\n"
         f"{vision.strip()}\n"
+    )
+
+
+def _milestone_regeneration_suffix(messages: list[str]) -> str:
+    return (
+        "\n\n### REGENERATION REQUIRED — previous milestones_md was rejected\n"
+        "Return the FULL JSON document again with the same top-level keys. "
+        "Fix every issue:\n"
+        + "\n".join(f"- {m}" for m in messages)
+        + "\n"
     )
 
 
@@ -399,18 +446,29 @@ def _parse_vertical_slice_json(
 
 
 def generate_bundle_from_llm(idea: str, client: LLMClient) -> VerticalSliceBundle:
-    raw = client.generate(_build_idea_prompt(idea))
-    data = _parse_vertical_slice_json(
-        raw, required_keys=("vision", "requirements_md", "architecture_md", "milestones_md")
-    )
-    milestones_md, _mw = finalize_llm_milestones_md(str(data["milestones_md"]))
-    bundle = VerticalSliceBundle(
-        vision=str(data["vision"]),
-        requirements_md=str(data["requirements_md"]),
-        architecture_md=str(data["architecture_md"]),
-        milestones_md=milestones_md,
-    )
-    return bundle
+    extra = ""
+    for attempt in range(2):
+        raw = client.generate(_build_idea_prompt(idea) + extra)
+        data = _parse_vertical_slice_json(
+            raw, required_keys=("vision", "requirements_md", "architecture_md", "milestones_md")
+        )
+        try:
+            milestones_md, _mw = finalize_llm_milestones_md(
+                str(data["milestones_md"]),
+                source_context=idea,
+            )
+        except WeakMilestonePlanError as exc:
+            if attempt == 0:
+                extra = _milestone_regeneration_suffix(exc.messages)
+                continue
+            raise
+        return VerticalSliceBundle(
+            vision=str(data["vision"]),
+            requirements_md=str(data["requirements_md"]),
+            architecture_md=str(data["architecture_md"]),
+            milestones_md=milestones_md,
+        )
+    raise RuntimeError("generate_bundle_from_llm: retry loop exhausted unexpectedly")
 
 
 def generate_bundle_from_llm_fixed_vision(vision_text: str, client: LLMClient) -> VerticalSliceBundle:
@@ -418,18 +476,32 @@ def generate_bundle_from_llm_fixed_vision(vision_text: str, client: LLMClient) -
     LLM generates requirements, architecture, and milestones only; ``vision_text`` is
     the source of truth and is not regenerated by the model.
     """
-    raw = client.generate(_build_fixed_vision_prompt(vision_text))
-    data = _parse_vertical_slice_json(
-        raw, required_keys=("requirements_md", "architecture_md", "milestones_md")
+    ctx = vision_text.strip()
+    extra = ""
+    for attempt in range(2):
+        raw = client.generate(_build_fixed_vision_prompt(vision_text) + extra)
+        data = _parse_vertical_slice_json(
+            raw, required_keys=("requirements_md", "architecture_md", "milestones_md")
+        )
+        try:
+            milestones_md, _mw = finalize_llm_milestones_md(
+                str(data["milestones_md"]),
+                source_context=ctx,
+            )
+        except WeakMilestonePlanError as exc:
+            if attempt == 0:
+                extra = _milestone_regeneration_suffix(exc.messages)
+                continue
+            raise
+        return VerticalSliceBundle(
+            vision=ctx,
+            requirements_md=str(data["requirements_md"]),
+            architecture_md=str(data["architecture_md"]),
+            milestones_md=milestones_md,
+        )
+    raise RuntimeError(
+        "generate_bundle_from_llm_fixed_vision: retry loop exhausted unexpectedly"
     )
-    milestones_md, _mw = finalize_llm_milestones_md(str(data["milestones_md"]))
-    bundle = VerticalSliceBundle(
-        vision=vision_text.strip(),
-        requirements_md=str(data["requirements_md"]),
-        architecture_md=str(data["architecture_md"]),
-        milestones_md=milestones_md,
-    )
-    return bundle
 
 
 def resolve_docs_llm_client() -> tuple[LLMClient | None, str | None]:

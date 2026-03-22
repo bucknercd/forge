@@ -6,6 +6,7 @@ from forge.cli import main
 from forge.llm import LLMClient
 from forge.milestone_synthesis import (
     accept_synthesized_milestones,
+    build_milestone_synthesis_prompt,
     load_synthesized_milestones,
     synthesize_milestones,
 )
@@ -37,6 +38,18 @@ def _bootstrap(tmp_path):
 - **Validation**: V
 """,
     )
+
+
+def test_synthesis_prompt_includes_vision_and_product_guidance(tmp_path):
+    _bootstrap(tmp_path)
+    Paths.VISION_FILE.write_text(
+        "Build logcheck: a CLI that scans syslog lines for ERROR.\n",
+        encoding="utf-8",
+    )
+    prompt = build_milestone_synthesis_prompt(desired_count=2)
+    assert "vision.txt" in prompt
+    assert "logcheck" in prompt
+    assert "product-building" in prompt.lower() or "requirements" in prompt.lower()
 
 
 def test_synthesize_saves_reviewed_artifact_without_writing_milestones(tmp_path):
@@ -195,6 +208,63 @@ def test_cli_milestone_synthesize_and_accept_json(tmp_path, monkeypatch, capsys)
     assert main() == 0
     accept_payload = json.loads(capsys.readouterr().out)
     assert accept_payload["ok"] is True
+
+
+def test_synthesize_rejects_bootstrap_only_titles(tmp_path):
+    _bootstrap(tmp_path)
+    llm = FakeLLM(
+        json.dumps(
+            {
+                "milestones": [
+                    {
+                        "title": "Project Setup",
+                        "objective": "Prepare documentation structure.",
+                        "scope": "Overview section in requirements.",
+                        "validation": "file_contains requirements Overview",
+                    }
+                ]
+            }
+        )
+    )
+    try:
+        synthesize_milestones(llm, desired_count=1)
+    except ValueError as exc:
+        assert "bootstrap" in str(exc).lower() or "bookkeeping" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_synthesize_rejects_ungrounded_when_requirements_rich(tmp_path):
+    _bootstrap(tmp_path)
+    long_req = " ".join(
+        [
+            "Logcheck analyzes syslog streams for ERROR severities and emits topn tables.",
+            "The logcheck CLI reads stdin or paths and ranks matching severities.",
+        ]
+        * 25
+    )
+    Paths.REQUIREMENTS_FILE.write_text(f"# Requirements\n\n{long_req}\n", encoding="utf-8")
+    llm = FakeLLM(
+        json.dumps(
+            {
+                "milestones": [
+                    {
+                        "title": "Krelborn zymurgy integrator",
+                        "objective": "Optimize the xzqtest krelborn pipeline unrelated to logs.",
+                        "scope": "Zymurgy subsystem and qvintar coupling.",
+                        "validation": "Krelborn acceptance suite passes.",
+                    }
+                ]
+            }
+        )
+    )
+    try:
+        synthesize_milestones(llm, desired_count=1)
+    except ValueError as exc:
+        low = str(exc).lower()
+        assert "terminology" in low or "requirements" in low
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def test_quality_warnings_detect_vague_fields(tmp_path):
