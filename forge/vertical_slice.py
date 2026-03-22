@@ -305,6 +305,25 @@ def finalize_llm_milestones_md(
     return repaired, all_warnings
 
 
+def canonical_milestones_md_from_llm_raw(
+    raw_milestones_md: str,
+    *,
+    source_context: str | None,
+) -> tuple[str, list[str]]:
+    """
+    Single entry point for turning raw LLM ``milestones_md`` JSON into the markdown that
+    must be stored on disk.
+
+    **Contract:** :func:`generate_bundle_from_llm` / :func:`generate_bundle_from_llm_fixed_vision`
+    must assign the returned string to :attr:`VerticalSliceBundle.milestones_md` only—never
+    ``data[\"milestones_md\"]`` from the LLM payload. :func:`materialize_bundle` then writes
+    that same string to ``docs/milestones.md``.
+    """
+    return finalize_llm_milestones_md(
+        raw_milestones_md, source_context=source_context
+    )
+
+
 def _product_docs_rules_block() -> str:
     return (
         "Product grounding (requirements_md + architecture_md):\n"
@@ -462,7 +481,7 @@ def generate_bundle_from_llm(idea: str, client: LLMClient) -> VerticalSliceBundl
             raw, required_keys=("vision", "requirements_md", "architecture_md", "milestones_md")
         )
         try:
-            milestones_md, _mw = finalize_llm_milestones_md(
+            canonical_milestones_md, _mw = canonical_milestones_md_from_llm_raw(
                 str(data["milestones_md"]),
                 source_context=idea,
             )
@@ -475,7 +494,7 @@ def generate_bundle_from_llm(idea: str, client: LLMClient) -> VerticalSliceBundl
             vision=str(data["vision"]),
             requirements_md=str(data["requirements_md"]),
             architecture_md=str(data["architecture_md"]),
-            milestones_md=milestones_md,
+            milestones_md=canonical_milestones_md,
         )
     raise RuntimeError("generate_bundle_from_llm: retry loop exhausted unexpectedly")
 
@@ -493,7 +512,7 @@ def generate_bundle_from_llm_fixed_vision(vision_text: str, client: LLMClient) -
             raw, required_keys=("requirements_md", "architecture_md", "milestones_md")
         )
         try:
-            milestones_md, _mw = finalize_llm_milestones_md(
+            canonical_milestones_md, _mw = canonical_milestones_md_from_llm_raw(
                 str(data["milestones_md"]),
                 source_context=ctx,
             )
@@ -506,7 +525,7 @@ def generate_bundle_from_llm_fixed_vision(vision_text: str, client: LLMClient) -
             vision=ctx,
             requirements_md=str(data["requirements_md"]),
             architecture_md=str(data["architecture_md"]),
-            milestones_md=milestones_md,
+            milestones_md=canonical_milestones_md,
         )
     raise RuntimeError(
         "generate_bundle_from_llm_fixed_vision: retry loop exhausted unexpectedly"

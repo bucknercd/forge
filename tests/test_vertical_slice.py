@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from forge.execution.apply import ArtifactActionApplier
 from forge.execution.parse import parse_forge_action_line, parse_forge_validation_line
 from forge.execution.plan import ExecutionPlanBuilder
@@ -16,6 +18,8 @@ from forge.llm import LLMClient
 from forge.milestone_llm_quality import WeakMilestonePlanError
 from forge.vertical_slice import (
     MILESTONES_DOC_PATH,
+    VerticalSliceBundle,
+    canonical_milestones_md_from_llm_raw,
     demo_bundle,
     finalize_llm_milestones_md,
     generate_bundle_from_llm,
@@ -26,6 +30,23 @@ from forge.vertical_slice import (
     resolve_vision_file_path,
     run_vertical_slice,
 )
+
+
+# Raw LLM shape: indented Forge bullets + ``**Forge Validation**:`` without leading ``- ``.
+RAW_LLM_MILESTONES_MALFORMED_HEADERS = """# Milestones
+
+## Milestone 1: Logcheck slice
+
+- **Objective**: Add logcheck CLI under examples/ for syslog review.
+- **Scope**: examples/ only.
+- **Validation**: Module exists and contains entrypoint.
+
+- **Forge Actions**:
+  - write_file examples/logcheck.py | def main():\\n    pass\\n
+  - mark_milestone_completed
+**Forge Validation**:
+  - path_file_contains examples/logcheck.py def main
+"""
 
 
 class _FakeVerticalSliceLLM(LLMClient):
@@ -404,6 +425,88 @@ def test_generate_bundle_logcheck_single_payload_integration():
     lowered = bundle.milestones_md.lower()
     assert "logcheck" in lowered
     assert "error" in bundle.requirements_md.lower() or "error" in lowered
+
+
+def test_materialize_bundle_writes_exact_bundle_milestones_md(tmp_path, monkeypatch):
+    """Regression: on-disk milestones.md must equal bundle.milestones_md (canonical/finalized)."""
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.ensure_project_structure()
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n", encoding="utf-8")
+    Paths.RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.RUN_HISTORY_FILE.touch()
+    idea = "Build logcheck tool for syslog parsing"
+    canonical, _ = canonical_milestones_md_from_llm_raw(
+        RAW_LLM_MILESTONES_MALFORMED_HEADERS,
+        source_context=idea,
+    )
+    assert RAW_LLM_MILESTONES_MALFORMED_HEADERS.strip() != canonical.strip()
+    assert "- **Forge Validation**:" in canonical
+    bundle = VerticalSliceBundle(
+        vision="v",
+        requirements_md="# R\n",
+        architecture_md="# A\n",
+        milestones_md=canonical,
+    )
+    materialize_bundle(bundle)
+    assert Paths.MILESTONES_FILE.read_text(encoding="utf-8") == canonical
+
+
+def test_generate_bundle_milestones_md_matches_canonical_and_disk(tmp_path, monkeypatch):
+    """LLM JSON ``milestones_md`` is normalized; bundle + docs file must not retain raw LLM text."""
+    idea = "Build logcheck tool for syslog parsing"
+    expected_canonical, _ = canonical_milestones_md_from_llm_raw(
+        RAW_LLM_MILESTONES_MALFORMED_HEADERS,
+        source_context=idea,
+    )
+    client = _FakeVerticalSliceLLM(
+        {
+            "vision": "logcheck",
+            "requirements_md": "# Requirements\n\nLogcheck.\n",
+            "architecture_md": "# Architecture\n\nexamples/logcheck.py\n",
+            "milestones_md": RAW_LLM_MILESTONES_MALFORMED_HEADERS,
+        }
+    )
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    bundle = generate_bundle_from_llm(idea, client)
+    assert bundle.milestones_md == expected_canonical
+    assert bundle.milestones_md != RAW_LLM_MILESTONES_MALFORMED_HEADERS
+    Paths.ensure_project_structure()
+    Paths.DECISIONS_FILE.write_text("# Decisions\n\n", encoding="utf-8")
+    Paths.RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Paths.RUN_HISTORY_FILE.touch()
+    materialize_bundle(bundle)
+    assert Paths.MILESTONES_FILE.read_text(encoding="utf-8") == bundle.milestones_md
+
+
+def test_generate_bundle_weak_bootstrap_rejected_after_normalization(tmp_path, monkeypatch):
+    """Parse succeeds only after normalize; weak-plan gate still rejects FORGE_INIT bootstrap."""
+    idea = "Build logcheck syslog CLI tool"
+    bootstrap_raw = """# Milestones
+
+## Milestone 1: Project Setup
+- **Objective**: Establish the initial project structure.
+- **Scope**: Bootstrap docs, runtime state, and baseline workflows.
+- **Validation**: Confirm core commands run successfully.
+- **Forge Actions**:
+  - append_section requirements Overview | FORGE_INIT_MARKER
+  - mark_milestone_completed
+**Forge Validation**:
+  - file_contains requirements FORGE_INIT_MARKER
+"""
+    client = _FakeVerticalSliceLLM(
+        {
+            "vision": "v",
+            "requirements_md": "# R\n",
+            "architecture_md": "# A\n",
+            "milestones_md": bootstrap_raw,
+        }
+    )
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    with pytest.raises(WeakMilestonePlanError):
+        generate_bundle_from_llm(idea, client)
 
 
 def test_materialize_demo_bundle_parseable(tmp_path, monkeypatch):
