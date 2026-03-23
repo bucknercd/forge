@@ -616,15 +616,16 @@ def test_generate_bundle_logcheck_single_payload_integration():
 
 ## Milestone 1: Implement logcheck core
 
-- **Objective**: Provide examples/logcheck.py CLI that reads log lines and filters ERROR.
+- **Objective**: Provide examples/logcheck.py CLI that filters ERROR lines and counts repeated messages.
 - **Scope**: Stdlib only; examples/ path.
-- **Validation**: path_file_contains checks for filtering logic.
+- **Validation**: behavior-oriented checks for filtering and counting logic.
 
 - **Forge Actions**:
-  - write_file examples/logcheck.py | import sys\\ndef main():\\n    print('logcheck')\\n
+  - write_file examples/logcheck.py | import sys\\ndef count_errors(lines):\\n    out = {}\\n    for ln in lines:\\n        if 'ERROR' in ln:\\n            out[ln] = out.get(ln, 0) + 1\\n    return out\\n\\ndef main():\\n    print('logcheck')\\n
   - mark_milestone_completed
 - **Forge Validation**:
-  - path_file_contains examples/logcheck.py logcheck
+  - path_file_contains examples/logcheck.py ERROR
+  - path_file_contains examples/logcheck.py count_errors
 """
     client = _FakeVerticalSliceLLM(
         {

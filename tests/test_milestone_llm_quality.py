@@ -173,9 +173,9 @@ def test_weak_synthesis_allows_grounded_plan():
     milestones = [
         {
             "title": "Implement logcheck parser",
-            "objective": "Parse syslog lines per requirements.",
+            "objective": "Parse syslog lines and count ERROR occurrences.",
             "scope": "examples/logcheck.py",
-            "validation": "path_file_contains examples/logcheck.py parse",
+            "validation": "path_file_contains examples/logcheck.py ERROR",
         }
     ]
     req = " ".join(
@@ -190,6 +190,72 @@ def test_weak_synthesis_allows_grounded_plan():
         requirements_excerpt=req,
         architecture_excerpt="logcheck module argparse stdin",
     )
+
+
+def test_weak_parsed_rejects_behavior_heavy_scaffold_first_milestone():
+    m = Milestone(
+        1,
+        "Milestone 1: Create CLI entrypoint and basic functionality",
+        "Create CLI entrypoint and basic functionality.",
+        "Read lines from file.",
+        "path_file_contains examples/logcheck.py argparse",
+        forge_actions=[
+            "write_file examples/logcheck.py | import argparse\\ndef main():\\n    pass\\n",
+            "mark_milestone_completed",
+        ],
+        forge_validation=[
+            "path_file_contains examples/logcheck.py argparse",
+        ],
+    )
+    msgs = weak_parsed_milestone_plan_messages(
+        [m],
+        idea_context=(
+            "Build logcheck: count repeated ERROR messages, print top 5 most frequent, "
+            "ignore INFO/DEBUG, and include unit tests."
+        ),
+    )
+    assert msgs
+    assert any("Milestone 1 is scaffolding-only" in x for x in msgs)
+
+
+def test_weak_parsed_rejects_placeholder_tests():
+    m = Milestone(
+        1,
+        "Milestone 1: Add parser",
+        "Implement parser and tests.",
+        "src/ and tests/",
+        "behavioral checks",
+        forge_actions=[
+            "write_file src/logcheck.py | def parse(lines):\\n    return []\\n",
+            "write_file tests/test_logcheck.py | def test_placeholder():\\n    pass\\n",
+            "mark_milestone_completed",
+        ],
+        forge_validation=["path_file_contains tests/test_logcheck.py test_placeholder"],
+    )
+    msgs = weak_parsed_milestone_plan_messages([m], idea_context="count ERROR top 5 ignore INFO DEBUG")
+    assert any("placeholder tests" in x.lower() for x in msgs)
+
+
+def test_weak_synthesis_rejects_behavior_collapse_to_structural_validation():
+    milestones = [
+        {
+            "title": "Create CLI entrypoint and basic functionality",
+            "objective": "Create CLI entrypoint.",
+            "scope": "Read lines from file.",
+            "validation": "path_file_contains examples/logcheck.py argparse",
+        }
+    ]
+    req = (
+        "Build logcheck to count repeated ERROR messages, print top 5 most frequent results, "
+        "ignore INFO and DEBUG, and include unit tests."
+    )
+    msgs = weak_synthesized_json_plan_messages(
+        milestones,
+        requirements_excerpt=req * 8,
+        architecture_excerpt="python cli src/logcheck.py tests/test_logcheck.py",
+    )
+    assert msgs
+    assert any("generic scaffolding" in x.lower() or "dropped behavioral requirements" in x.lower() for x in msgs)
 
 
 def test_run_vertical_slice_surfaces_weak_plan_on_llm_path(tmp_path, monkeypatch):

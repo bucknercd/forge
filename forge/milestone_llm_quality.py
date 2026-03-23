@@ -166,6 +166,28 @@ _DOC_ANCHOR_PREFIXES = (
 )
 
 _CODE_ROOTS = ("examples/", "src/", "scripts/", "tests/")
+_GENERIC_SCAFFOLD_PHRASES = (
+    "basic functionality",
+    "cli entrypoint",
+    "entrypoint",
+    "scaffold",
+    "boilerplate",
+    "processes lines",
+)
+_BEHAVIOR_TERMS = (
+    "error",
+    "count",
+    "top",
+    "frequent",
+    "filter",
+    "ignore",
+    "debug",
+    "info",
+    "aggregate",
+    "summar",
+    "unit test",
+    "pytest",
+)
 
 
 def _action_lower(line: str) -> str:
@@ -216,6 +238,67 @@ def _is_substantive_code_action(action: str) -> bool:
     return False
 
 
+def _contains_behavior_terms(text: str) -> bool:
+    t = text.lower()
+    return any(tok in t for tok in _BEHAVIOR_TERMS)
+
+
+def _is_behavior_heavy_context(text: str | None) -> bool:
+    if not text:
+        return False
+    return _contains_behavior_terms(text)
+
+
+def _is_placeholder_test_action(action: str) -> bool:
+    a = action.strip().lower()
+    if not a.startswith("write_file tests/") and not a.startswith("write_file test/"):
+        return False
+    if " | " not in a:
+        return False
+    body = a.split(" | ", 1)[1]
+    return any(
+        p in body
+        for p in (
+            "pass\\n",
+            "\npass\n",
+            "# todo",
+            "todo:",
+            "placeholder",
+            "tbd",
+            "assert true",
+        )
+    )
+
+
+def _is_structural_validation_line(rule: str) -> bool:
+    r = rule.strip().lower()
+    if not r:
+        return True
+    structural_markers = (
+        "argparse",
+        "unittest",
+        "pytest",
+        "def main",
+        "if __name__",
+        "compile",
+        "exists",
+        "path_file_contains",
+    )
+    behavior_markers = (
+        "error",
+        "count",
+        "top",
+        "filter",
+        "ignore",
+        "debug",
+        "info",
+        "aggregate",
+    )
+    if any(b in r for b in behavior_markers):
+        return False
+    return any(s in r for s in structural_markers)
+
+
 def weak_parsed_milestone_plan_messages(
     milestones: list[Milestone],
     *,
@@ -237,6 +320,8 @@ def weak_parsed_milestone_plan_messages(
         all_actions.extend(m.forge_actions)
 
     combined_blob = "\n".join(blob_parts).lower()
+
+    behavior_heavy = _is_behavior_heavy_context(idea_context)
 
     for i, m in enumerate(milestones, start=1):
         for a in m.forge_actions:
@@ -285,6 +370,42 @@ def weak_parsed_milestone_plan_messages(
                     f"(expected terms like: {', '.join(sorted(tokens)[:6])}). "
                     "Ground every milestone in the requested product."
                 )
+
+    # Placeholder tests are not acceptable completion evidence.
+    for i, m in enumerate(milestones, start=1):
+        for a in m.forge_actions:
+            if _is_placeholder_test_action(a):
+                errors.append(
+                    f"Milestone {i} writes placeholder tests (pass/TODO/TBD). "
+                    "Add meaningful assertions for behavior."
+                )
+
+    if behavior_heavy and milestones:
+        first = milestones[0]
+        first_blob = " ".join(
+            [first.title, first.objective, first.scope, first.validation, *first.forge_actions]
+        ).lower()
+        if any(p in first_blob for p in _GENERIC_SCAFFOLD_PHRASES):
+            errors.append(
+                "Milestone 1 is scaffolding-only/generic for a behavior-heavy project; "
+                "first milestone must deliver a user-visible behavioral slice."
+            )
+        if not _contains_behavior_terms(first_blob):
+            errors.append(
+                "Milestone 1 does not retain key behavioral requirements "
+                "(e.g. filtering/counting/top-k/tests)."
+            )
+        if not any(_is_substantive_code_action(a) for a in first.forge_actions):
+            errors.append(
+                "Milestone 1 must include substantive implementation actions, not only wrappers/docs."
+            )
+
+        all_validation_lines = [v for m in milestones for v in (m.forge_validation or [])]
+        if all_validation_lines and all(_is_structural_validation_line(v) for v in all_validation_lines):
+            errors.append(
+                "Forge Validation is structural-only for behavior-heavy requirements; "
+                "include at least one behavioral assertion (filtering/counting/top-k/etc)."
+            )
 
     return errors
 
@@ -377,6 +498,46 @@ def weak_synthesized_json_plan_messages(
             errors.append(
                 "Synthesized milestones do not reference terminology from requirements.md "
                 "or architecture.md; regenerate with concrete, source-grounded milestones."
+            )
+
+    ctx_blob = f"{requirements_excerpt}\n{architecture_excerpt}".lower()
+    behavior_heavy = _is_behavior_heavy_context(ctx_blob)
+    milestone_text = "\n".join(
+        f"{m.get('title', '')} {m.get('objective', '')} {m.get('scope', '')} {m.get('validation', '')}"
+        for m in milestones
+    ).lower()
+    if behavior_heavy:
+        if any(p in (f"{milestones[0].get('title','')} {milestones[0].get('objective','')}").lower() for p in _GENERIC_SCAFFOLD_PHRASES):
+            errors.append(
+                "Milestone 1 is generic scaffolding for behavior-heavy requirements "
+                "(e.g., 'basic functionality'/'CLI entrypoint')."
+            )
+        if not _contains_behavior_terms(milestone_text):
+            errors.append(
+                "Synthesized milestones dropped behavioral requirements "
+                "(filter/count/top-k/ignore-levels/tests)."
+            )
+        if all(
+            (
+                any(
+                    x in str(m.get("validation", "")).lower()
+                    for x in ("contains", "path_file_contains", "argparse", "unittest")
+                )
+                and not _contains_behavior_terms(str(m.get("validation", "")).lower())
+            )
+            for m in milestones
+        ):
+            errors.append(
+                "Synthesized validation is mostly structural for behavior-heavy requirements; "
+                "include behavior-oriented validation text."
+            )
+
+    # Python CLI default layout unless examples are explicitly requested by context.
+    if ("python" in ctx_blob and "cli" in ctx_blob) and ("examples/" not in ctx_blob):
+        if ("examples/" in milestone_text) and ("src/" not in milestone_text):
+            errors.append(
+                "For Python CLI projects, default implementation paths should be under src/ "
+                "(use examples/ only when explicitly requested)."
             )
 
     return errors
