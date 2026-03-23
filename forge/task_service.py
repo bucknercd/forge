@@ -23,6 +23,7 @@ from forge.llm_resolve import resolve_llm_client_from_policy
 from forge.paths import Paths
 from forge.policy_config import load_planner_policy
 from forge.execution.parse import parse_forge_action_line
+from forge.validation_normalize import sanitize_validation_rules
 
 MIN_MULTI_TASKS = 2
 MAX_TASKS = 6
@@ -189,6 +190,8 @@ def task_to_execution_milestone(parent: Milestone, task: Task) -> Milestone:
 
 
 def _task_from_dict(milestone_id: int, data: dict[str, Any]) -> Task:
+    forge_validation_raw = [str(x) for x in data.get("forge_validation", [])]
+    forge_validation, _ = sanitize_validation_rules(forge_validation_raw, log_warnings=False)
     return Task(
         id=int(data["id"]),
         milestone_id=milestone_id,
@@ -202,7 +205,7 @@ def _task_from_dict(milestone_id: int, data: dict[str, Any]) -> Task:
         status=str(data.get("status", "not_started")),
         milestone_context=str(data.get("milestone_context", "")),
         forge_actions=[str(x) for x in data.get("forge_actions", [])],
-        forge_validation=[str(x) for x in data.get("forge_validation", [])],
+        forge_validation=forge_validation,
     )
 
 
@@ -602,6 +605,8 @@ def _try_llm_expand_tasks(parent: Milestone, milestone_id: int, client: LLMClien
         if not isinstance(item, dict):
             return None
         try:
+            raw_fv = [str(x) for x in item.get("forge_validation", [])]
+            norm_fv, _ = sanitize_validation_rules(raw_fv, log_warnings=True)
             out.append(
                 Task(
                     id=int(item["id"]),
@@ -615,7 +620,7 @@ def _try_llm_expand_tasks(parent: Milestone, milestone_id: int, client: LLMClien
                     done_when=str(item.get("done_when", "")),
                     status=str(item.get("status", "not_started")),
                     forge_actions=[str(x) for x in item.get("forge_actions", [])],
-                    forge_validation=[str(x) for x in item.get("forge_validation", [])],
+                    forge_validation=norm_fv,
                 )
             )
         except (KeyError, TypeError, ValueError):

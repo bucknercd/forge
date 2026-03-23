@@ -102,7 +102,7 @@ def test_partial_failure_then_retry_success_updates_diagnostics(tmp_path):
     assert Validator.validate_milestone_with_report(1)[0] is True
 
 
-def test_invalid_forge_validation_reports_line_and_context(tmp_path):
+def test_invalid_forge_validation_is_dropped_before_parser(tmp_path):
     configure_project(
         tmp_path,
         """
@@ -121,6 +121,7 @@ def test_invalid_forge_validation_reports_line_and_context(tmp_path):
 
     Executor.execute_milestone(1)
     result = json.loads((Paths.SYSTEM_DIR / "results" / "milestone_1.json").read_text())
-    assert "validation_error" in result
-    assert "Invalid Forge Validation for milestone 1" in result["validation_error"]
-    assert "line" in result["validation_error"]
+    assert "validation_error" not in result
+    ok, reason = Validator.validate_milestone_with_report(1)
+    assert ok is True
+    assert "Invalid Forge Validation" not in reason

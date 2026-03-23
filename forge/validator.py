@@ -3,6 +3,7 @@ import json
 from forge.design_manager import MilestoneService
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.validation_rules import validate_all_rules
+from forge.validation_normalize import sanitize_validation_rules
 
 _MILESTONES_DOC = "docs/milestones.md"
 
@@ -84,6 +85,10 @@ class Validator:
                 f"Add a '- **Forge Validation**:' block in {_MILESTONES_DOC}."
                 f"{_milestones_fix_hint()}"
             )
+        sanitized_validation, _warn = sanitize_validation_rules(
+            list(milestone.forge_validation), log_warnings=True
+        )
+        milestone.forge_validation = sanitized_validation
 
         try:
             rules = ExecutionPlanBuilder.parse_validation_rules(milestone)
