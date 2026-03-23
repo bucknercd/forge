@@ -129,6 +129,34 @@ def test_llm_planner_prompt_includes_repo_context(tmp_path):
     assert "Capture context" in prompt
 
 
+def test_llm_planner_prompt_includes_behavioral_depth_guidance_and_context(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Behavioral Context
+- **Objective**: Parse logs and count repeated ERROR messages.
+- **Scope**: Implement core parser.
+- **Validation**: Top 5 aggregated errors are returned.
+""",
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    milestone.scope = (
+        "Task slice for parser.\n\n"
+        "Parent milestone context:\n"
+        "Ignore INFO/DEBUG, aggregate ERROR, and produce top 5."
+    )
+    llm = CapturingLLM(json.dumps({"actions": ["mark_milestone_completed"]}))
+    _plan = LLMPlanner(llm).build_plan(milestone)
+    prompt = llm.last_prompt
+    assert "Behavioral depth requirements" in prompt
+    assert "Detected behavior signals:" in prompt
+    assert "Parent milestone context" in prompt
+    assert "counting/aggregation/grouping/sorting" in prompt
+
+
 def test_llm_planner_invalid_output_fails_clearly(tmp_path):
     configure_project(
         tmp_path,

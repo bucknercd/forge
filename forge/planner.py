@@ -19,6 +19,7 @@ from forge.planner_normalize import (
     persist_llm_planner_raw_on_failure,
 )
 from forge.project_profile import detect_project_profile, planner_guidance_for_profile
+from forge.task_ir import extract_behavior_signals
 from forge.vertical_slice_json import extract_vertical_slice_json_text
 
 
@@ -200,6 +201,19 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
         ]
     )
     profile_guide = planner_guidance_for_profile(profile)
+    behavior_signals = extract_behavior_signals(
+        milestone.title, milestone.objective, milestone.scope, milestone.validation
+    )
+    behavioral_depth_guidance = ""
+    if behavior_signals:
+        behavioral_depth_guidance = (
+            "Behavioral depth requirements:\n"
+            f"- Detected behavior signals: {', '.join(behavior_signals)}\n"
+            "- Do not stop at file read + filter-only logic.\n"
+            "- Include at least one meaningful transformation such as counting/aggregation/grouping/sorting.\n"
+            "- Prefer composable function boundaries (e.g., parse -> count -> top-k formatting).\n"
+            "- Use structured outputs (dict, Counter, list[tuple], or similar), not raw passthrough lines.\n\n"
+        )
     return (
         "You are generating a Forge milestone execution plan.\n"
         "Return ONLY a JSON object with this exact shape:\n"
@@ -232,6 +246,7 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
         "- Prefer a small plan (2-8 actions) that satisfies the milestone.\n\n"
         f"Detected project profile: {profile.profile_name}\n"
         f"Profile guidance: {profile_guide}\n\n"
+        f"{behavioral_depth_guidance}"
         "Milestone:\n"
         f"- id: {milestone.id}\n"
         f"- title: {milestone.title}\n"

@@ -914,7 +914,11 @@ class Executor:
 
             changed_paths = list(changed_paths)
             all_stub_recs, stub_fails = analyze_changed_python_files(
-                changed_paths, Paths.BASE_DIR
+                changed_paths,
+                Paths.BASE_DIR,
+                expected_behavior_signals=(
+                    list(task_ir_for_profile.behavior_signals) if behavior_heavy_task else None
+                ),
             )
             stub_artifact_path = persist_stub_detection_results(
                 Paths.BASE_DIR, fc_run_id, all_stub_recs
@@ -1535,6 +1539,7 @@ class Executor:
 
         raw_task_id = payload.get("task_id")
         task_id: int | None = int(raw_task_id) if raw_task_id is not None else None
+        task_ir = None
 
         try:
             planner_mode = payload.get("planner_mode", "deterministic")
@@ -1671,7 +1676,13 @@ class Executor:
 
                 changed_paths = list(changed_paths)
                 all_stub_recs, stub_fails = analyze_changed_python_files(
-                    changed_paths, Paths.BASE_DIR
+                    changed_paths,
+                    Paths.BASE_DIR,
+                    expected_behavior_signals=(
+                        list(task_ir.behavior_signals)
+                        if task_ir is not None and task_ir.task_type == "behavioral"
+                        else None
+                    ),
                 )
                 _stub_art = persist_stub_detection_results(
                     Paths.BASE_DIR, fc_run_id, all_stub_recs

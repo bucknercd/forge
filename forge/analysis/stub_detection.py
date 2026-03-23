@@ -70,6 +70,9 @@ class _Analysis(ast.NodeVisitor):
         self.has_loop = False
         self.has_file_io = False
         self.has_meaningful_if = False
+        self.has_filter_predicate = False
+        self.has_aggregation = False
+        self.has_structured_transform = False
 
     def visit_For(self, node: ast.For) -> Any:
         self.has_loop = True
@@ -87,9 +90,13 @@ class _Analysis(ast.NodeVisitor):
         fn = node.func
         if isinstance(fn, ast.Name) and fn.id == "open":
             self.has_file_io = True
+        if isinstance(fn, ast.Name) and fn.id in ("sorted", "enumerate", "zip"):
+            self.has_structured_transform = True
         elif isinstance(fn, ast.Attribute):
             if fn.attr in ("read", "read_text", "read_bytes", "open", "iterdir", "glob"):
                 self.has_file_io = True
+            if fn.attr in ("append", "extend", "items", "most_common", "update"):
+                self.has_structured_transform = True
         self.generic_visit(node)
 
     def visit_With(self, node: ast.With) -> Any:
@@ -103,6 +110,27 @@ class _Analysis(ast.NodeVisitor):
     def visit_If(self, node: ast.If) -> Any:
         if not _is_name_main_guard(node.test):
             self.has_meaningful_if = True
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> Any:
+        for target in node.targets:
+            if isinstance(target, ast.Subscript):
+                self.has_aggregation = True
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> Any:
+        if isinstance(node.target, ast.Subscript):
+            self.has_aggregation = True
+        self.generic_visit(node)
+
+    def visit_ListComp(self, node: ast.ListComp) -> Any:
+        # Filter-only comprehensions are a common shallow implementation shape.
+        if any(g.ifs for g in node.generators):
+            self.has_filter_predicate = True
+        self.generic_visit(node)
+
+    def visit_DictComp(self, node: ast.DictComp) -> Any:
+        self.has_structured_transform = True
         self.generic_visit(node)
 
 
@@ -121,7 +149,12 @@ def _collect_all_function_names(tree: ast.AST) -> list[str]:
     return out
 
 
-def detect_missing_impl(file_path: str, content: str) -> dict[str, Any]:
+def detect_missing_impl(
+    file_path: str,
+    content: str,
+    *,
+    expected_behavior_signals: list[str] | None = None,
+) -> dict[str, Any]:
     """
     Return ``{"is_stub": bool, "signals": [str], "confidence": float}``.
 
@@ -133,7 +166,9 @@ def detect_missing_impl(file_path: str, content: str) -> dict[str, Any]:
 
     path_l = file_path.lower()
     if path_l.endswith(".py"):
-        return _detect_missing_impl_python(file_path, content)
+        return _detect_missing_impl_python(
+            file_path, content, expected_behavior_signals=expected_behavior_signals
+        )
     if path_l.endswith(".go"):
         return _detect_missing_impl_go(file_path, content)
     if path_l.endswith(".tf"):
@@ -141,7 +176,12 @@ def detect_missing_impl(file_path: str, content: str) -> dict[str, Any]:
     return {"is_stub": False, "signals": [], "confidence": 0.0}
 
 
-def _detect_missing_impl_python(file_path: str, content: str) -> dict[str, Any]:
+def _detect_missing_impl_python(
+    file_path: str,
+    content: str,
+    *,
+    expected_behavior_signals: list[str] | None = None,
+) -> dict[str, Any]:
     signals: list[str] = []
     confidence = 0.0
 
@@ -178,6 +218,18 @@ def _detect_missing_impl_python(file_path: str, content: str) -> dict[str, Any]:
     # "Collections / processing": loop or comprehension
     has_comp = any(isinstance(n, (ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp)) for n in ast.walk(tree))
     has_processing = has_loop or has_comp or meaningful_if
+    expects_deeper_behavior = bool(
+        set(expected_behavior_signals or [])
+        & {"count", "aggregate", "group", "sort", "top 5", "rank", "transform"}
+    )
+    if (
+        expects_deeper_behavior
+        and analysis.has_filter_predicate
+        and not analysis.has_aggregation
+        and not analysis.has_structured_transform
+    ):
+        signals.append("filter_only_no_aggregation")
+        confidence += 0.42
 
     only_cli_scaffold = cli_hint and not has_loop and not has_file_io
     if only_cli_scaffold:
@@ -206,7 +258,9 @@ def _detect_missing_impl_python(file_path: str, content: str) -> dict[str, Any]:
     structural = bool(
         {s for s in signals} & {"only_cli_scaffold", "tiny_file", "only_main_wrapper"}
     )
-    is_stub = structural and confidence >= 0.7
+    is_stub = (structural and confidence >= 0.7) or (
+        "filter_only_no_aggregation" in signals and confidence >= 0.7
+    )
 
     return {"is_stub": is_stub, "signals": signals, "confidence": confidence}
 
@@ -272,6 +326,8 @@ def should_analyze_path(file_path: str) -> bool:
 def analyze_changed_source_files(
     files_changed: list[str],
     base_dir: Path,
+    *,
+    expected_behavior_signals: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Run :func:`detect_missing_impl` on each changed path that
@@ -296,7 +352,11 @@ def analyze_changed_source_files(
             content = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        result = detect_missing_impl(rel, content)
+        result = detect_missing_impl(
+            rel,
+            content,
+            expected_behavior_signals=expected_behavior_signals,
+        )
         rec = {
             "path": str(p),
             "rel_path": rel,
@@ -316,11 +376,17 @@ def analyze_changed_source_files(
 def analyze_changed_python_files(
     files_changed: list[str],
     base_dir: Path,
+    *,
+    expected_behavior_signals: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Backward-compatible alias.
     """
-    return analyze_changed_source_files(files_changed, base_dir)
+    return analyze_changed_source_files(
+        files_changed,
+        base_dir,
+        expected_behavior_signals=expected_behavior_signals,
+    )
 
 
 def persist_stub_detection_results(

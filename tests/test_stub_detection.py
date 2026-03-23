@@ -100,3 +100,40 @@ def test_terraform_placeholder_only_flagged() -> None:
     r = detect_missing_impl("infra/main.tf", content)
     assert "tf_placeholder_only" in r["signals"] or "no_meaningful_terraform_blocks" in r["signals"]
     assert r["is_stub"] is True or r["confidence"] >= 0.6
+
+
+def test_behavioral_filter_only_is_flagged_missing_depth() -> None:
+    content = """
+def parse_log(file_path):
+    with open(file_path, "r", encoding="utf-8") as file:
+        lines = file.readlines()
+    return [line for line in lines if "ERROR" in line and "INFO" not in line and "DEBUG" not in line]
+"""
+    r = detect_missing_impl(
+        "src/logcheck.py",
+        content,
+        expected_behavior_signals=["parse", "filter", "count", "top 5"],
+    )
+    assert r["is_stub"] is True
+    assert "filter_only_no_aggregation" in r["signals"]
+
+
+def test_behavioral_counting_impl_not_flagged_missing_depth() -> None:
+    content = """
+from collections import Counter
+
+def parse_log(file_path):
+    counts = Counter()
+    with open(file_path, "r", encoding="utf-8") as file:
+        for line in file:
+            if "ERROR" in line and "INFO" not in line and "DEBUG" not in line:
+                counts[line.strip()] += 1
+    return counts.most_common(5)
+"""
+    r = detect_missing_impl(
+        "src/logcheck.py",
+        content,
+        expected_behavior_signals=["parse", "filter", "count", "top 5"],
+    )
+    assert "filter_only_no_aggregation" not in r["signals"]
+    assert r["is_stub"] is False

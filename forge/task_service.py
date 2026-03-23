@@ -174,11 +174,15 @@ def task_to_execution_milestone(parent: Milestone, task: Task) -> Milestone:
     the roadmap milestone in ``docs/milestones.md``.
     """
     awl, vwl = task.with_lines_tuples()
+    scope = task.summary or task.objective or parent.scope
+    milestone_ctx = (task.milestone_context or "").strip()
+    if milestone_ctx:
+        scope = f"{scope}\n\nParent milestone context:\n{milestone_ctx}"
     return Milestone(
         id=parent.id,
         title=f"{parent.title} :: {task.title}",
         objective=task.objective,
-        scope=task.summary or task.objective or parent.scope,
+        scope=scope,
         validation=task.validation or parent.validation,
         summary=parent.summary,
         depends_on=list(parent.depends_on),
