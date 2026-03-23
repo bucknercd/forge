@@ -34,6 +34,19 @@ class CapturingLLM(LLMClient):
         return self._output
 
 
+class SequenceLLM(LLMClient):
+    def __init__(self, outputs: list[str]):
+        self._outputs = list(outputs)
+        self.calls = 0
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        out = self._outputs[min(self.calls, len(self._outputs) - 1)]
+        self.calls += 1
+        return out
+
+
 def test_deterministic_planner_matches_existing_builder(tmp_path):
     configure_project(
         tmp_path,
@@ -242,3 +255,45 @@ def test_llm_preview_warns_for_suspicious_duplicate_heavy_plan(tmp_path):
     assert "non-deterministic" in text
     assert "high action count" in text
     assert "duplicate" in text
+
+
+def test_llm_planner_retries_on_malformed_insert_after_separator(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Retry malformed bounded edit
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+""",
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    bad = json.dumps(
+        {
+            "actions": [
+                "write_file src/log_parser.py | def read_log_file(path):\\n    return []\\n",
+                "insert_after_in_file tests/test_log_parser.py | def test_read_log_file(): pass",
+                "mark_milestone_completed",
+            ]
+        }
+    )
+    good = json.dumps(
+        {
+            "actions": [
+                "write_file src/log_parser.py | def read_log_file(path):\\n    return []\\n",
+                "write_file tests/test_log_parser.py | def test_read_log_file():\\n    assert read_log_file('x') == []\\n",
+                "mark_milestone_completed",
+            ]
+        }
+    )
+    llm = SequenceLLM([bad, good])
+    planner = LLMPlanner(llm, fallback_to_milestone_actions=False)
+    plan = planner.build_plan(milestone)
+    ser = plan.to_serializable()
+    assert len(ser["actions"]) == 3
+    assert ser["actions"][1]["type"] == "write_file"
+    assert llm.calls == 2
+    assert any("RETRY REQUIRED" in p for p in llm.prompts[1:])
