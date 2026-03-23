@@ -91,6 +91,18 @@ forge task-apply-plan <plan_id>
 forge run-next
 ```
 
+### Fresh Start / Reuse Repo
+
+If you want to generate a new app idea in the same directory, clear derived execution state first:
+
+```bash
+forge reset --generated-only
+# or
+forge vertical-slice --fresh --idea "New app idea..."
+# or
+forge build --fresh --idea "New app idea..."
+```
+
 ## Using an LLM
 
 Forge supports OpenAI-backed planning/docs generation via policy.

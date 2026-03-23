@@ -59,6 +59,7 @@ from forge.task_service import (
     list_tasks,
     task_count_for_milestone,
 )
+from forge.fresh_start import reset_generated_only
 
 
 def _cli_preview_planner_metadata(planner, planner_policy) -> dict:
@@ -1698,6 +1699,11 @@ def main() -> int:
         help="Happy path: vertical slice (default: demo bundle; use --idea / vision for LLM)",
     )
     build_parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Reset derived execution state + generated artifacts before running vertical-slice.",
+    )
+    build_parser.add_argument(
         "--no-demo",
         action="store_true",
         help="Do not use the built-in demo; requires --idea, --vision-file, or --from-vision",
@@ -1753,6 +1759,16 @@ def main() -> int:
     subparsers.add_parser(
         "fix",
         help="Run or repair the next pending task (alias for run-next)",
+    )
+
+    reset_parser = subparsers.add_parser(
+        "reset",
+        help="Clear derived execution state; use --generated-only for app reuse.",
+    )
+    reset_parser.add_argument(
+        "--generated-only",
+        action="store_true",
+        help="Wipe .system tasks/reviewed plans/results + delete previously generated code.",
     )
 
     subparsers.add_parser(
@@ -2053,6 +2069,11 @@ def main() -> int:
         help="End-to-end: write vision/specs/milestones, save reviewed plan, apply, run gates",
     )
     vertical_slice_parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Reset derived execution state + generated artifacts before running vertical-slice.",
+    )
+    vertical_slice_parser.add_argument(
         "--demo",
         action="store_true",
         help="Use built-in todo CLI example (no LLM for docs)",
@@ -2150,6 +2171,28 @@ def main() -> int:
         ForgeCLI.project_logs(limit=args.limit)
     elif args.command == "fix":
         ForgeCLI.execute_next()
+    elif args.command == "reset":
+        if not getattr(args, "generated_only", False):
+            print("forge reset: please pass --generated-only.", file=sys.stderr)
+            return 1
+        wiped = reset_generated_only()
+        if getattr(args, "json", False):
+            print(json.dumps(wiped, indent=2, sort_keys=True))
+        else:
+            print("Reset complete.")
+            # Lightweight summary for humans.
+            if wiped.get("tasks_removed"):
+                print("- removed .system/tasks")
+            if wiped.get("reviewed_plans_removed"):
+                print("- removed .system/reviewed_plans")
+            if wiped.get("results_removed"):
+                print("- removed .system/results")
+            if wiped.get("milestone_state_removed"):
+                print("- removed .system/milestone_state.json")
+            if wiped.get("runs_removed"):
+                print("- removed .forge/runs")
+            if wiped.get("artifacts_removed"):
+                print("- removed .artifacts")
     elif args.command == "build":
         has_llm = bool(args.idea or args.vision_file or args.from_vision)
         if args.no_demo and not has_llm:
@@ -2159,6 +2202,8 @@ def main() -> int:
             )
             return 1
         use_demo = not has_llm and not args.no_demo
+        if getattr(args, "fresh", False):
+            reset_generated_only()
         idea_text = None
         fixed_vision_text = None
         if use_demo:
@@ -2300,6 +2345,8 @@ def main() -> int:
             if args.no_gate_validate
             else None
         )
+        if getattr(args, "fresh", False):
+            reset_generated_only()
         idea_raw = (args.idea or "").strip()
         has_idea = bool(idea_raw)
         has_vision_file = bool(args.vision_file)
