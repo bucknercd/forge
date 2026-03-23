@@ -186,6 +186,78 @@ def test_behavior_heavy_llm_decomposition_rejects_setup_only_first_task(
     assert "count" in first_blob or "parse" in first_blob or "error" in first_blob
 
 
+def test_behavior_heavy_llm_decomposition_rejects_filter_only_first_task(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Logcheck behavior
+- **Objective**: Parse logs, count repeated ERROR lines, ignore INFO/DEBUG, and output top 5.
+- **Scope**: src/ and tests/
+- **Validation**: verify filtering, counting, aggregation, and top-k behavior
+""",
+    )
+    (tmp_path / "forge-policy.json").write_text(
+        json.dumps({"planner": {"mode": "llm", "llm_client": "openai"}}, indent=2),
+        encoding="utf-8",
+    )
+
+    class _FilterOnlyFirstTaskLLM:
+        def generate(self, prompt: str) -> str:  # noqa: ARG002
+            return json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "id": 1,
+                            "title": "Read and filter log lines",
+                            "objective": "Read log file and filter out INFO/DEBUG lines.",
+                            "summary": "Initial parse + filter slice.",
+                            "depends_on": [],
+                            "validation": "filtering works",
+                            "done_when": "filtered lines returned",
+                            "forge_actions": [],
+                            "forge_validation": [],
+                        },
+                        {
+                            "id": 2,
+                            "title": "Count repeated ERROR lines",
+                            "objective": "Aggregate repeated ERROR messages and produce top 5.",
+                            "summary": "Add counting and top-k behavior.",
+                            "depends_on": [1],
+                            "validation": "counting works",
+                            "done_when": "top 5 output rendered",
+                            "forge_actions": [],
+                            "forge_validation": [],
+                        },
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(
+        "forge.task_service.resolve_llm_client_from_policy",
+        lambda _policy: (_FilterOnlyFirstTaskLLM(), None),
+    )
+
+    r = expand_milestone_to_tasks(milestone_id=1, force=True)
+    assert r["ok"] is True
+    # filter-only first task must be rejected for behavior-heavy milestones.
+    assert r.get("expansion_mode") != "llm_multi"
+    tasks = list_tasks(1)
+    assert tasks
+    first_blob = f"{tasks[0].objective} {tasks[0].summary}".lower()
+    assert (
+        "count" in first_blob
+        or "aggregate" in first_blob
+        or "top 5" in first_blob
+        or "top-k" in first_blob
+    )
+
+
 def test_expand_creates_multiple_tasks_from_typical_milestone(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)

@@ -679,6 +679,18 @@ _BEHAVIOR_TERMS = (
     "info",
 )
 
+_DEEP_BEHAVIOR_TERMS = (
+    "count",
+    "aggregate",
+    "aggregation",
+    "group",
+    "sort",
+    "top 5",
+    "top-5",
+    "rank",
+    "transform",
+)
+
 _SETUP_ONLY_TERMS = (
     "sample",
     "setup",
@@ -709,6 +721,11 @@ def _task_has_behavior_signal(t: Task) -> bool:
     return any(tok in blob for tok in _BEHAVIOR_TERMS)
 
 
+def _task_has_deep_behavior_signal(t: Task) -> bool:
+    blob = " ".join((t.title or "", t.objective or "", t.summary or "", t.validation or "")).lower()
+    return any(tok in blob for tok in _DEEP_BEHAVIOR_TERMS)
+
+
 def _task_is_setup_only(t: Task) -> bool:
     blob = " ".join((t.title or "", t.objective or "", t.summary or "")).lower()
     has_setup = any(tok in blob for tok in _SETUP_ONLY_TERMS)
@@ -731,6 +748,12 @@ def _enforce_behavior_heavy_early_task_expectation(
             False,
             "Behavior-heavy milestone lost semantic intent in early tasks "
             "(first two tasks lack parse/count/filter/top-k behavior signals).",
+        )
+    if not _task_has_deep_behavior_signal(first):
+        return (
+            False,
+            "Behavior-heavy milestone first task is under-scoped: requires at least one "
+            "aggregation/transform behavior signal (count/aggregate/group/sort/top/rank/transform).",
         )
     return True, ""
 

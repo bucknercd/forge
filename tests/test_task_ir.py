@@ -12,7 +12,11 @@ from forge.design_manager import MilestoneService
 from forge.executor import Executor
 from forge.planner import Planner
 from forge.reviewed_plan import save_reviewed_plan
-from forge.task_ir import compile_task_to_ir, plan_is_substantive_for_task
+from forge.task_ir import (
+    compile_task_to_ir,
+    plan_is_substantive_for_task,
+    task_ir_has_minimum_behavior_depth,
+)
 from forge.task_service import Task, ensure_tasks_for_milestone, get_task, save_tasks
 from tests.forge_test_project import configure_project
 
@@ -110,6 +114,24 @@ def test_compile_task_ir_preserves_behavior_from_milestone_context():
     assert ir.task_type == "behavioral"
     assert "count" in ir.behavior_signals
     assert "filter" in ir.behavior_signals or "ignore" in ir.behavior_signals
+
+
+def test_behavioral_task_requires_minimum_depth_signals():
+    shallow = _task(
+        summary="Filter log lines",
+        objective="Read and filter INFO/DEBUG lines from logs.",
+        validation="filtered lines are returned",
+    )
+    deep = _task(
+        summary="Count repeated errors",
+        objective="Parse logs and count repeated ERROR lines; output top 5.",
+        validation="verify aggregation and top-k results",
+    )
+    ir_shallow = compile_task_to_ir(shallow)
+    ir_deep = compile_task_to_ir(deep)
+    assert ir_shallow.task_type == "behavioral"
+    assert task_ir_has_minimum_behavior_depth(ir_shallow) is False
+    assert task_ir_has_minimum_behavior_depth(ir_deep) is True
 
 
 def test_behavioral_task_mark_only_plan_non_substantive():
@@ -268,6 +290,45 @@ def test_behavioral_preview_rejects_mark_only_plan(tmp_path):
     out = Executor.preview_milestone(1, planner=_MarkOnlyPlanner(), task_id=1)
     assert out["ok"] is False
     assert out.get("failure_type") == "non_substantive_behavioral_plan"
+
+
+def test_behavioral_preview_rejects_under_scoped_filter_only_task(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: B
+- **Objective**: Parse logs, count repeated ERROR lines, and output top 5.
+- **Scope**: src/ and tests/.
+- **Validation**: verify counting and top-k behavior.
+""",
+    )
+    ensure_tasks_for_milestone(1)
+    t = get_task(1, 1)
+    assert t is not None
+    save_tasks(
+        1,
+        [
+            Task(
+                id=t.id,
+                milestone_id=t.milestone_id,
+                title=t.title,
+                objective="Read and filter INFO/DEBUG lines only.",
+                summary="Filter-only behavior slice.",
+                depends_on=list(t.depends_on),
+                files_allowed=t.files_allowed,
+                validation=t.validation,
+                done_when=t.done_when,
+                status=t.status,
+                forge_actions=[],
+                forge_validation=list(t.forge_validation),
+            )
+        ],
+    )
+    out = Executor.preview_milestone(1, planner=_WriteSrcPlanner(), task_id=1)
+    assert out["ok"] is False
+    assert out.get("failure_type") == "behavioral_task_underscoped"
 
 
 def test_behavioral_preview_accepts_src_write_plan(tmp_path):

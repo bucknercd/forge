@@ -57,7 +57,11 @@ from forge.task_plan_synthesis import (
     synthesize_execution_plan_from_task,
     task_has_nonempty_embedded_forge_actions,
 )
-from forge.task_ir import compile_task_to_ir, plan_is_substantive_for_task
+from forge.task_ir import (
+    compile_task_to_ir,
+    plan_is_substantive_for_task,
+    task_ir_has_minimum_behavior_depth,
+)
 from forge.project_profile import project_profile_for_task_ir
 from forge.planner import DeterministicPlanner, Planner
 from forge.reviewed_plan import (
@@ -1278,6 +1282,19 @@ class Executor:
                 "milestone_id": milestone_id,
             }
         task_ir = compile_task_to_ir(task)
+        if not task_ir_has_minimum_behavior_depth(task_ir):
+            return {
+                "ok": False,
+                "message": (
+                    f"Rejected task m{milestone_id}-t{task_id}: behavioral task is under-scoped "
+                    "and lacks aggregation/transform intent "
+                    "(count/aggregate/group/sort/top/rank/transform)."
+                ),
+                "milestone_id": milestone_id,
+                "task_id": task_id,
+                "failure_type": "behavioral_task_underscoped",
+                "task_ir": task_ir.to_dict(),
+            }
         milestone = task_to_execution_milestone(parent, task)
 
         plan: ExecutionPlan | None = None

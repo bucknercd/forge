@@ -28,6 +28,15 @@ from forge.execution.models import (
 
 
 TaskType = str  # behavioral | structural | documentation | unknown
+_MIN_BEHAVIOR_DEPTH_SIGNALS = {
+    "count",
+    "aggregate",
+    "transform",
+    "group",
+    "sort",
+    "top 5",
+    "rank",
+}
 
 _BEHAVIOR_SIGNAL_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bcount(?:ing)?\b", "count"),
@@ -221,3 +230,18 @@ def plan_is_substantive_for_task(task_ir: TaskIR, plan: ExecutionPlan) -> bool:
         # Structural tasks are intentionally less strict (incremental scaffolding allowed).
         return True
     return True
+
+
+def task_ir_has_minimum_behavior_depth(task_ir: TaskIR) -> bool:
+    """
+    Behavioral tasks must carry at least one deeper behavior signal so planning
+    is not constrained to read/filter-only slices.
+    """
+    if task_ir.task_type != "behavioral":
+        return True
+    intrinsic_signals = extract_behavior_signals(
+        task_ir.objective,
+        task_ir.summary,
+        *task_ir.requirements,
+    )
+    return bool(set(intrinsic_signals) & _MIN_BEHAVIOR_DEPTH_SIGNALS)
