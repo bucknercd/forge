@@ -45,6 +45,7 @@ def test_write_file_examples_python_is_normalized_to_src(tmp_path):
     assert wf["rel_path"] == "src/foo.py"
     assert wf["path_normalized_from"] == "examples/foo.py"
     assert wf["path_normalized_to"] == "src/foo.py"
+    assert (tmp_path / "src" / "__init__.py").is_file()
 
 
 def test_write_file_rewrites_examples_imports_in_tests(tmp_path):
@@ -64,6 +65,8 @@ def test_write_file_rewrites_examples_imports_in_tests(tmp_path):
         "from examples.logcheck import main\n"
         "import examples.logcheck as lc\n"
         "from examples import logcheck\n"
+        "from ..src.logcheck import parse_log\n"
+        "from ..src import logcheck as lg\n"
     )
     plan = ExecutionPlan(
         milestone_id=1,
@@ -75,6 +78,8 @@ def test_write_file_rewrites_examples_imports_in_tests(tmp_path):
     assert "from src.logcheck import main" in text
     assert "import src.logcheck as lc" in text
     assert "from src import logcheck" in text
+    assert "from src.logcheck import parse_log" in text
+    assert "from src import logcheck as lg" in text
     wf = next(a for a in res.actions_applied if a["type"] == "write_file")
     assert wf.get("imports_rewritten") is True
 

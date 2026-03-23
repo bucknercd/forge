@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import re
 
 from forge.decision_tracker import DecisionTracker
 from forge.design_manager import DesignManager, Milestone
@@ -82,6 +83,9 @@ def _rewrite_imports_examples_to_src(body: str) -> tuple[str, bool]:
     out = out.replace("from examples.", "from src.")
     out = out.replace("import examples.", "import src.")
     out = out.replace("from examples import ", "from src import ")
+    # Keep pytest imports repo-root compatible and avoid invalid relative forms.
+    out = re.sub(r"\bfrom\s+\.\.src\.", "from src.", out)
+    out = re.sub(r"\bfrom\s+\.\.src\s+import\s+", "from src import ", out)
     return out, out != body
 
 
@@ -395,6 +399,11 @@ class ArtifactActionApplier:
                     verify_write_file_disk_matches(
                         path, after, rel_path=normalized_rel_path
                     )
+                    if normalized_rel_path.startswith("src/"):
+                        init_path = self._paths.BASE_DIR / "src" / "__init__.py"
+                        if not init_path.exists():
+                            init_path.parent.mkdir(parents=True, exist_ok=True)
+                            init_path.write_text("", encoding="utf-8")
                 result.files_changed.append(path)
             self._append_file_record(
                 result,
