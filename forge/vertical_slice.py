@@ -215,7 +215,7 @@ def _persist_milestone_md_failure_artifacts(
 
 
 def demo_bundle() -> VerticalSliceBundle:
-    write_action = f"write_file examples/todo_cli.py | {_escape_write_body(TODO_CLI_DEMO)}"
+    write_action = f"write_file src/todo_cli.py | {_escape_write_body(TODO_CLI_DEMO)}"
     milestones = f"""# Milestones
 
 ## Milestone 1: Ship minimal runnable todo CLI
@@ -226,10 +226,10 @@ def demo_bundle() -> VerticalSliceBundle:
 
 - **Forge Actions**:
   - {write_action}
-  - append_section requirements Overview | **Vertical slice**: demo todo CLI (`examples/todo_cli.py`).
+  - append_section requirements Overview | **Vertical slice**: demo todo CLI (`src/todo_cli.py`).
   - mark_milestone_completed
 - **Forge Validation**:
-  - path_file_contains examples/todo_cli.py def main
+  - path_file_contains src/todo_cli.py def main
   - file_contains requirements Vertical slice
 """
     return VerticalSliceBundle(
@@ -242,7 +242,7 @@ def demo_bundle() -> VerticalSliceBundle:
             "## Overview\n"
             "This demo project exists to prove Forge can generate and apply real code.\n\n"
             "## Functional\n"
-            "- Provide `examples/todo_cli.py` runnable with `python examples/todo_cli.py`.\n"
+            "- Provide `src/todo_cli.py` runnable with `python src/todo_cli.py`.\n"
             "- Support optional `--add <text>` to record a todo message.\n"
         ),
         architecture_md=(
@@ -1178,7 +1178,7 @@ def run_vertical_slice(
     gv = gate_validate if gate_validate is not None else True
     cmd_override = gate_test_cmd
     if not disable_gate_test_cmd and cmd_override is None and demo:
-        cmd_override = "python examples/todo_cli.py"
+        cmd_override = "python src/todo_cli.py"
 
     resolved: ReviewedApplyPolicy = merge_reviewed_apply_policy(
         base_policy,

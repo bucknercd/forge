@@ -70,6 +70,21 @@ def _action_type_name(action: Any) -> str:
     return type(action).__name__
 
 
+def _canonicalize_python_rel_path(rel_path: str) -> tuple[str, str | None]:
+    rp = rel_path.replace("\\", "/")
+    if rp.startswith("examples/") and rp.endswith(".py"):
+        return f"src/{rp[len('examples/'):]}", rel_path
+    return rel_path, None
+
+
+def _rewrite_imports_examples_to_src(body: str) -> tuple[str, bool]:
+    out = body
+    out = out.replace("from examples.", "from src.")
+    out = out.replace("import examples.", "import src.")
+    out = out.replace("from examples import ", "from src import ")
+    return out, out != body
+
+
 class ArtifactActionApplier:
     """Deterministic file updates only (stdlib + project Paths)."""
 
@@ -90,6 +105,15 @@ class ArtifactActionApplier:
             "milestones": self._paths.MILESTONES_FILE,
         }
         return mapping[target]
+
+    def _resolve_rel_path_action(self, rel_path: str) -> tuple[Path, str, dict[str, Any]]:
+        normalized_rel, normalized_from = _canonicalize_python_rel_path(rel_path)
+        path = resolve_safe_project_path(normalized_rel, self._paths.BASE_DIR)
+        extra: dict[str, Any] = {}
+        if normalized_from is not None:
+            extra["path_normalized_from"] = normalized_from
+            extra["path_normalized_to"] = normalized_rel
+        return path, normalized_rel, extra
 
     def _read_bounded_file(self, path: Path) -> str:
         if not path.exists():
@@ -350,20 +374,26 @@ class ArtifactActionApplier:
             return
 
         if isinstance(action, ActionWriteFile):
-            path = resolve_safe_project_path(action.rel_path, self._paths.BASE_DIR)
+            path, normalized_rel_path, norm_extra = self._resolve_rel_path_action(
+                action.rel_path
+            )
             if not dry_run:
                 path.parent.mkdir(parents=True, exist_ok=True)
             before = path.read_text(encoding="utf-8") if path.exists() else ""
             after = action.body
+            if normalized_rel_path.endswith(".py"):
+                after, imports_rewritten = _rewrite_imports_examples_to_src(after)
+                if imports_rewritten:
+                    norm_extra["imports_rewritten"] = True
             log_write_file_payload_stage(
-                action.rel_path, after, "before_write", line_no=None
+                normalized_rel_path, after, "before_write", line_no=None
             )
             changed = before != after
             if changed:
                 if not dry_run:
                     path.write_text(after, encoding="utf-8")
                     verify_write_file_disk_matches(
-                        path, after, rel_path=action.rel_path
+                        path, after, rel_path=normalized_rel_path
                     )
                 result.files_changed.append(path)
             self._append_file_record(
@@ -374,7 +404,8 @@ class ArtifactActionApplier:
                 after=after,
                 changed=changed,
                 extra={
-                    "rel_path": action.rel_path,
+                    "rel_path": normalized_rel_path,
+                    **norm_extra,
                     "noop": not changed,
                     "bytes_before": len(before.encode("utf-8")),
                     "bytes_after": len(after.encode("utf-8")),

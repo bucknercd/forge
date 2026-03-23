@@ -194,7 +194,7 @@ def test_vertical_slice_demo_creates_runnable_cli(tmp_path, monkeypatch):
         gate_test_output_max_chars=None,
     )
     assert out["ok"], out
-    todo = tmp_path / "examples" / "todo_cli.py"
+    todo = tmp_path / "src" / "todo_cli.py"
     assert todo.exists()
     assert "def main" in todo.read_text(encoding="utf-8")
 

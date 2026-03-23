@@ -2101,7 +2101,7 @@ def main() -> int:
     vertical_slice_parser.add_argument(
         "--gate-test-cmd",
         type=str,
-        help="Shell command gate after apply (demo default: python examples/todo_cli.py)",
+        help="Shell command gate after apply (demo default: python src/todo_cli.py)",
     )
     vertical_slice_parser.add_argument(
         "--no-gate-test-cmd",
