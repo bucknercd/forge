@@ -231,6 +231,91 @@ def test_vertical_slice_emits_core_events_to_jsonl(tmp_path, monkeypatch):
     assert "run_completed" in types
 
 
+def test_vertical_slice_llm_timeout_reports_llm_generation_phase(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.initialize_project()
+
+    class _TimeoutLLM(LLMClient):
+        def generate(self, prompt: str) -> str:  # noqa: ARG002
+            raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(
+        "forge.vertical_slice.resolve_docs_llm_client",
+        lambda: (_TimeoutLLM(), None),
+    )
+    collector = EventListCollector()
+    bus = RunEventBus("testrun_timeout_1", [collector])
+    out = run_vertical_slice(
+        demo=False,
+        idea="build logcheck",
+        fixed_vision=None,
+        milestone_id=1,
+        planner_mode=None,
+        gate_validate=True,
+        gate_test_cmd=None,
+        disable_gate_test_cmd=False,
+        gate_test_timeout_seconds=None,
+        gate_test_output_max_chars=None,
+        event_bus=bus,
+    )
+    assert out["ok"] is False
+    llm_stage = next(s for s in out["stages"] if s.get("stage") == "llm_generation")
+    assert llm_stage["ok"] is False
+    assert llm_stage.get("failure_type") == "llm_timeout"
+    assert "LLM generation timed out" in llm_stage.get("message", "")
+    run_failed = [e for e in collector.events if e["type"] == "run_failed"]
+    assert run_failed
+    assert run_failed[-1]["data"].get("phase") == "llm_generation"
+
+
+def test_vertical_slice_llm_timeout_no_false_materialize_docs_failure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.initialize_project()
+
+    class _TimeoutLLM(LLMClient):
+        def generate(self, prompt: str) -> str:  # noqa: ARG002
+            raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(
+        "forge.vertical_slice.resolve_docs_llm_client",
+        lambda: (_TimeoutLLM(), None),
+    )
+    collector = EventListCollector()
+    bus = RunEventBus("testrun_timeout_2", [collector])
+    out = run_vertical_slice(
+        demo=False,
+        idea="build logcheck",
+        fixed_vision=None,
+        milestone_id=1,
+        planner_mode=None,
+        gate_validate=True,
+        gate_test_cmd=None,
+        disable_gate_test_cmd=False,
+        gate_test_timeout_seconds=None,
+        gate_test_output_max_chars=None,
+        event_bus=bus,
+    )
+    assert out["ok"] is False
+    bad_materialize = [
+        s
+        for s in out["stages"]
+        if s.get("stage") == "materialize_docs" and not s.get("ok")
+    ]
+    assert bad_materialize == []
+    phase_done = [
+        e
+        for e in collector.events
+        if e["type"] == "phase_completed"
+        and (e.get("data") or {}).get("phase") == "llm_generation"
+    ]
+    assert phase_done
+    assert phase_done[-1]["data"].get("ok") is False
+
+
 def test_read_vision_file_text_missing(tmp_path):
     p = tmp_path / "nope.txt"
     try:

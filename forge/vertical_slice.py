@@ -802,6 +802,13 @@ def _failure_reason_from_apply(apply_res: dict) -> str:
     return str(apply_res.get("gate_summary") or "validation failed")
 
 
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    msg = str(exc).lower()
+    return ("timed out" in msg) or ("timeout" in msg)
+
+
 def run_vertical_slice(
     *,
     demo: bool,
@@ -972,6 +979,38 @@ def run_vertical_slice(
                 )
                 bus.emit(PHASE_COMPLETED, phase="llm_generation", ok=False, message=str(exc))
                 bus.emit(RUN_FAILED, reason=str(exc), phase="llm_generation")
+                bus.emit(RUN_COMPLETED, ok=False)
+                return _finalize(stages, ok=False)
+            except Exception as exc:  # noqa: BLE001
+                timeout = _is_timeout_error(exc)
+                if timeout:
+                    msg = (
+                        "LLM generation timed out while generating "
+                        "requirements/architecture/milestones."
+                    )
+                    failure_type = "llm_timeout"
+                else:
+                    msg = f"LLM generation failed: {exc}"
+                    failure_type = "transient_generation_failure"
+                stages.append(
+                    {
+                        "stage": "llm_generation",
+                        "ok": False,
+                        "mode": doc_mode,
+                        "message": msg,
+                        "failure_type": failure_type,
+                        "error_detail": str(exc),
+                    }
+                )
+                bus.emit(
+                    PHASE_COMPLETED,
+                    phase="llm_generation",
+                    ok=False,
+                    message=msg,
+                    failure_type=failure_type,
+                    error_detail=str(exc),
+                )
+                bus.emit(RUN_FAILED, reason=msg, phase="llm_generation")
                 bus.emit(RUN_COMPLETED, ok=False)
                 return _finalize(stages, ok=False)
             bus.emit(PHASE_COMPLETED, phase="llm_generation", ok=True)
