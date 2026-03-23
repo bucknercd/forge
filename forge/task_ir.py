@@ -137,11 +137,15 @@ def compile_task_to_ir(task: Any) -> TaskIR:
 
     embedded_actions = [str(a).strip() for a in (getattr(task, "forge_actions", []) or []) if str(a).strip()]
     has_embedded_actions = bool(embedded_actions)
-    behavior_signals = extract_behavior_signals(summary, objective, *requirements, *validations)
+    milestone_context = str(getattr(task, "milestone_context", "") or "").strip()
+    milestone_ctx_lines = _split_normalized_lines(milestone_context)
+    behavior_signals = extract_behavior_signals(
+        summary, objective, *requirements, *validations, *milestone_ctx_lines
+    )
     task_type = classify_task_type(
         summary=summary,
         objective=objective,
-        requirements=requirements,
+        requirements=requirements + milestone_ctx_lines,
         validations=validations,
         has_embedded_actions=has_embedded_actions,
     )
@@ -162,6 +166,7 @@ def compile_task_to_ir(task: Any) -> TaskIR:
             "raw_validation": validation_text,
             "forge_validation_count": len(forge_validation),
             "embedded_action_count": len(embedded_actions),
+            "milestone_context": milestone_context,
         },
     )
 
@@ -183,7 +188,14 @@ def _is_substantive_action(a: ForgeAction) -> bool:
         ),
     ):
         rel = str(getattr(a, "rel_path", "")).replace("\\", "/")
-        return rel.startswith(("src/", "scripts/", "tests/", "examples/"))
+        if rel.startswith(("src/", "scripts/", "examples/", "infra/")):
+            return True
+        if rel.startswith("tests/") and isinstance(a, ActionWriteFile):
+            body = str(getattr(a, "body", "") or "").lower()
+            if "pass\n" in body or "todo" in body or "placeholder" in body:
+                return False
+            return True
+        return False
     return True
 
 
@@ -191,7 +203,17 @@ def plan_is_substantive_for_task(task_ir: TaskIR, plan: ExecutionPlan) -> bool:
     actions = list(plan.actions or [])
     substantive = [_is_substantive_action(a) for a in actions]
     has_substantive = any(substantive)
+    source_impl = False
+    for a in actions:
+        rel = str(getattr(a, "rel_path", "")).replace("\\", "/")
+        if rel.startswith(("src/", "scripts/", "examples/", "infra/")):
+            source_impl = True
+            break
     if task_ir.task_type == "behavioral":
+        # Early behavioral tasks must include real source implementation, not only
+        # sample data/tests/docs/meta actions.
+        if int(task_ir.task_id or 0) in (1, 2):
+            return has_substantive and source_impl
         return has_substantive
     if task_ir.task_type == "documentation":
         return any(not isinstance(a, ActionMarkMilestoneCompleted) for a in actions)

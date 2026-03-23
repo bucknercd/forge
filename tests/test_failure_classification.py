@@ -131,3 +131,20 @@ def test_repair_mode_prompt_block_unknown():
     fc = FailureClassification("unknown_failure", "apply", (), {})
     block = repair_mode_prompt_block(fc)
     assert "unknown_failure" in block
+
+
+def test_classify_no_tests_ran_behavior_heavy_as_missing_impl():
+    fc = classify_repair_failure(
+        phase="gates",
+        gate_results=[
+            {
+                "name": "repo_test_command",
+                "ok": False,
+                "message": "Repository test command failed with exit code 5.",
+                "details": {"output": "no tests ran in 0.01s"},
+            }
+        ],
+        behavior_heavy=True,
+    )
+    assert fc.mode == "missing_impl"
+    assert "no_tests_ran" in fc.signals

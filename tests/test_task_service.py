@@ -119,6 +119,73 @@ def test_llm_task_expansion_strips_pseudo_actions_and_invokes_planner(tmp_path, 
     assert capture.last_prompt != ""
 
 
+def test_behavior_heavy_llm_decomposition_rejects_setup_only_first_task(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Logcheck behavior
+- **Objective**: Parse logs, count repeated ERROR lines, ignore INFO/DEBUG, and output top 5.
+- **Scope**: src/ and tests/
+- **Validation**: verify filtering, counting, and top-k behavior
+""",
+    )
+    (tmp_path / "forge-policy.json").write_text(
+        json.dumps({"planner": {"mode": "llm", "llm_client": "openai"}}, indent=2),
+        encoding="utf-8",
+    )
+
+    class _ShallowLLM:
+        def generate(self, prompt: str) -> str:  # noqa: ARG002
+            return json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "id": 1,
+                            "title": "Generate sample log file",
+                            "objective": "Create examples/sample_log.txt.",
+                            "summary": "Sample data setup only.",
+                            "depends_on": [],
+                            "validation": "file exists",
+                            "done_when": "sample file created",
+                            "forge_actions": [],
+                            "forge_validation": [],
+                        },
+                        {
+                            "id": 2,
+                            "title": "Add tests",
+                            "objective": "Add tests file",
+                            "summary": "testing setup",
+                            "depends_on": [1],
+                            "validation": "pytest -q",
+                            "done_when": "tests added",
+                            "forge_actions": [],
+                            "forge_validation": [],
+                        },
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(
+        "forge.task_service.resolve_llm_client_from_policy",
+        lambda _policy: (_ShallowLLM(), None),
+    )
+
+    r = expand_milestone_to_tasks(milestone_id=1, force=True)
+    assert r["ok"] is True
+    # setup-only llm decomposition should be rejected and fall back.
+    assert r.get("expansion_mode") != "llm_multi"
+    tasks = list_tasks(1)
+    assert tasks
+    first_blob = f"{tasks[0].objective} {tasks[0].summary}".lower()
+    assert "count" in first_blob or "parse" in first_blob or "error" in first_blob
+
+
 def test_expand_creates_multiple_tasks_from_typical_milestone(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)

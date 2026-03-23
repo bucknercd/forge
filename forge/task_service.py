@@ -75,6 +75,7 @@ def set_task_status(milestone_id: int, task_id: int, status: str) -> None:
                     validation=t.validation,
                     done_when=t.done_when,
                     status=status,
+                    milestone_context=t.milestone_context,
                     forge_actions=list(t.forge_actions),
                     forge_validation=list(t.forge_validation),
                 )
@@ -153,6 +154,7 @@ class Task:
     validation: str = ""
     done_when: str = ""
     status: str = "not_started"
+    milestone_context: str = ""
     forge_actions: list[str] = field(default_factory=list)
     forge_validation: list[str] = field(default_factory=list)
 
@@ -198,6 +200,7 @@ def _task_from_dict(milestone_id: int, data: dict[str, Any]) -> Task:
         validation=str(data.get("validation", "")),
         done_when=str(data.get("done_when", "")),
         status=str(data.get("status", "not_started")),
+        milestone_context=str(data.get("milestone_context", "")),
         forge_actions=[str(x) for x in data.get("forge_actions", [])],
         forge_validation=[str(x) for x in data.get("forge_validation", [])],
     )
@@ -240,6 +243,7 @@ def save_tasks(milestone_id: int, tasks: list[Task]) -> None:
                 "validation": t.validation,
                 "done_when": t.done_when,
                 "status": t.status,
+                "milestone_context": t.milestone_context,
                 "forge_actions": t.forge_actions,
                 "forge_validation": t.forge_validation,
             }
@@ -653,6 +657,85 @@ _PSEUDO_ACTION_VERBS = {
     "edit_file",
 }
 
+_BEHAVIOR_TERMS = (
+    "parse",
+    "count",
+    "filter",
+    "ignore",
+    "aggregate",
+    "sort",
+    "top 5",
+    "error",
+    "debug",
+    "info",
+)
+
+_SETUP_ONLY_TERMS = (
+    "sample",
+    "setup",
+    "scaffold",
+    "bootstrap",
+    "placeholder",
+    "readme",
+    "documentation",
+    "docs",
+)
+
+
+def _parent_behavior_heavy(parent: Milestone) -> bool:
+    blob = " ".join(
+        (
+            parent.title or "",
+            parent.objective or "",
+            parent.scope or "",
+            parent.validation or "",
+            parent.summary or "",
+        )
+    ).lower()
+    return any(t in blob for t in _BEHAVIOR_TERMS)
+
+
+def _task_has_behavior_signal(t: Task) -> bool:
+    blob = " ".join((t.title or "", t.objective or "", t.summary or "", t.validation or "")).lower()
+    return any(tok in blob for tok in _BEHAVIOR_TERMS)
+
+
+def _task_is_setup_only(t: Task) -> bool:
+    blob = " ".join((t.title or "", t.objective or "", t.summary or "")).lower()
+    has_setup = any(tok in blob for tok in _SETUP_ONLY_TERMS)
+    return has_setup and not _task_has_behavior_signal(t)
+
+
+def _enforce_behavior_heavy_early_task_expectation(
+    parent: Milestone, tasks: list[Task]
+) -> tuple[bool, str]:
+    if not tasks:
+        return False, "No tasks to evaluate."
+    if not _parent_behavior_heavy(parent):
+        return True, ""
+    first = tasks[0]
+    first_two = tasks[:2]
+    if _task_is_setup_only(first):
+        return False, "Behavior-heavy milestone decomposed into setup-only first task."
+    if not any(_task_has_behavior_signal(t) for t in first_two):
+        return (
+            False,
+            "Behavior-heavy milestone lost semantic intent in early tasks "
+            "(first two tasks lack parse/count/filter/top-k behavior signals).",
+        )
+    return True, ""
+
+
+def _attach_parent_behavior_context(parent: Milestone, tasks: list[Task]) -> None:
+    ctx = (
+        f"title: {parent.title}\n"
+        f"objective: {parent.objective}\n"
+        f"scope: {parent.scope}\n"
+        f"validation: {parent.validation}\n"
+    ).strip()
+    for t in tasks:
+        t.milestone_context = ctx
+
 
 def _sanitize_task_forge_actions(parent: Milestone, tasks: list[Task]) -> dict[str, Any]:
     """
@@ -758,7 +841,10 @@ def expand_milestone_to_tasks(*, milestone_id: int, force: bool = False) -> dict
                 llm_tasks = _try_llm_expand_tasks(parent, milestone_id, client)
                 if llm_tasks:
                     ok_llm, _ = validate_task_list(llm_tasks, require_multi=True)
-                    if ok_llm:
+                    ok_behavior, _ = _enforce_behavior_heavy_early_task_expectation(
+                        parent, llm_tasks
+                    )
+                    if ok_llm and ok_behavior:
                         chosen = llm_tasks
                         mode = "llm_multi"
 
@@ -771,6 +857,7 @@ def expand_milestone_to_tasks(*, milestone_id: int, force: bool = False) -> dict
 
     # Safety: tasks must never persist unsupported pseudo-actions.
     # Also make LLM-expanded tasks spec-only by default.
+    _attach_parent_behavior_context(parent, chosen)
     sanitize_res = _sanitize_task_forge_actions(parent, chosen)
     llm_cleared = _clear_forge_actions_for_llm_tasks(mode, chosen)
 

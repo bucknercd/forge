@@ -96,6 +96,22 @@ def test_behavior_signals_extracted_from_fields():
     )
 
 
+def test_compile_task_ir_preserves_behavior_from_milestone_context():
+    t = _task(
+        summary="Generate sample file",
+        objective="Create sample data file.",
+        validation="file exists",
+    )
+    t.milestone_context = (
+        "objective: Parse logs and count repeated ERROR lines; ignore INFO/DEBUG.\n"
+        "validation: top 5 frequent results\n"
+    )
+    ir = compile_task_to_ir(t)
+    assert ir.task_type == "behavioral"
+    assert "count" in ir.behavior_signals
+    assert "filter" in ir.behavior_signals or "ignore" in ir.behavior_signals
+
+
 def test_behavioral_task_mark_only_plan_non_substantive():
     t = _task(
         summary="logcheck",
@@ -121,7 +137,7 @@ def test_behavioral_task_write_file_substantive():
     assert plan_is_substantive_for_task(ir, plan) is True
 
 
-def test_behavioral_task_tests_only_is_substantive():
+def test_behavioral_task_tests_only_not_substantive_for_early_tasks():
     t = _task(
         summary="logcheck",
         objective="count and filter errors",
@@ -137,7 +153,7 @@ def test_behavioral_task_tests_only_is_substantive():
             )
         ],
     )
-    assert plan_is_substantive_for_task(ir, plan) is True
+    assert plan_is_substantive_for_task(ir, plan) is False
 
 
 def test_structural_task_threshold_explicit():
@@ -292,7 +308,7 @@ def test_behavioral_preview_accepts_src_write_plan(tmp_path):
     assert out["ok"] is True
 
 
-def test_behavioral_preview_accepts_tests_only_plan(tmp_path):
+def test_behavioral_preview_rejects_tests_only_plan_for_task1(tmp_path):
     configure_project(
         tmp_path,
         """
@@ -327,7 +343,8 @@ def test_behavioral_preview_accepts_tests_only_plan(tmp_path):
         ],
     )
     out = Executor.preview_milestone(1, planner=_WriteTestsOnlyPlanner(), task_id=1)
-    assert out["ok"] is True
+    assert out["ok"] is False
+    assert out.get("failure_type") == "non_substantive_behavioral_plan"
 
 
 def test_structural_preview_allows_mark_only_plan(tmp_path):

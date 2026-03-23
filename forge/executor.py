@@ -499,6 +499,7 @@ class Executor:
             return {"ok": False, "apply_ok": False, "message": msg}
         task_ir_for_profile = compile_task_to_ir(task)
         project_profile = project_profile_for_task_ir(task_ir_for_profile).profile_name
+        behavior_heavy_task = task_ir_for_profile.task_type == "behavioral"
 
         parent_milestone = MilestoneService.get_milestone(milestone_id)
         if not parent_milestone:
@@ -783,6 +784,7 @@ class Executor:
                     previous_plan_hash=prev_plan_hash,
                     current_plan_hash=curr_plan_hash,
                     planner_metadata=planner_meta,
+                    behavior_heavy=behavior_heavy_task,
                 )
                 last_failure_classification = fc.to_dict()
                 last_message = _primary_failure_message_from_classification(
@@ -827,6 +829,56 @@ class Executor:
 
             # Post-gate stub detection (deterministic): fail if product Python is scaffold-only.
             fc_run_id = (getattr(event_bus, "run_id", "") or "").strip() or uuid.uuid4().hex[:16]
+            reviewed_payload = load_reviewed_plan(plan_id)
+            reviewed_plan_for_stub = (
+                ExecutionPlan.from_serializable(reviewed_payload["plan"])
+                if reviewed_payload and reviewed_payload.get("plan")
+                else ExecutionPlan(milestone_id=milestone_id, actions=[])
+            )
+
+            if behavior_heavy_task:
+                has_source_impl_target = any(
+                    str(getattr(a, "rel_path", "")).replace("\\", "/").startswith(
+                        ("src/", "scripts/", "examples/", "infra/")
+                    )
+                    for a in reviewed_plan_for_stub.actions
+                )
+                if not has_source_impl_target:
+                    last_message = (
+                        "Behavior-heavy task plan did not target source implementation files; "
+                        "missing core behavior implementation."
+                    )
+                    fc = FailureClassification(
+                        "missing_impl",
+                        "gates",
+                        ("no_source_impl_targets",),
+                        {
+                            "requirement_summary": (parent_milestone.objective or "").strip()[
+                                :1200
+                            ]
+                        },
+                    )
+                    last_failure_classification = fc.to_dict()
+                    last_message = _primary_failure_message_from_classification(
+                        last_failure_classification, fallback=last_message
+                    )
+                    repair_context = build_repair_context(
+                        milestone_id,
+                        task_id,
+                        attempt,
+                        apply_ok=True,
+                        apply_errors=[],
+                        gate_results=gates,
+                        artifact_test_path=gen.rel_path,
+                        extra_message=None if gen.generated else gen.message,
+                        classification=fc.to_dict(),
+                        repair_mode=fc.mode,
+                        project_profile=project_profile,
+                    )
+                    last_failure_phase = "gates"
+                    prev_plan_hash = curr_plan_hash
+                    continue
+
             changed_paths = set(apply_res.get("files_changed") or [])
 
             # If a follow-up repair attempt re-applies an identical stub, write_file
@@ -834,12 +886,7 @@ class Executor:
             # To avoid false success, always analyze python files targeted by the
             # reviewed plan actions.
             try:
-                stub_payload = load_reviewed_plan(plan_id)
-                stub_plan: ExecutionPlan | None = (
-                    ExecutionPlan.from_serializable(stub_payload["plan"])
-                    if stub_payload and stub_payload.get("plan")
-                    else None
-                )
+                stub_plan: ExecutionPlan | None = reviewed_plan_for_stub
             except Exception:  # noqa: BLE001
                 stub_plan = None
 
@@ -851,6 +898,19 @@ class Executor:
                     if type(a).__name__ == "ActionWriteFile" and rel.startswith("examples/"):
                         rel = "src/" + rel[len("examples/") :]
                     changed_paths.add(str(Paths.BASE_DIR / rel))
+
+            if behavior_heavy_task:
+                source_paths = [
+                    p
+                    for p in changed_paths
+                    if "/src/" in p
+                    or "/scripts/" in p
+                    or "/examples/" in p
+                    or "/infra/" in p
+                    or p.endswith(("/src", "/scripts", "/examples", "/infra"))
+                ]
+                if source_paths:
+                    changed_paths = set(source_paths)
 
             changed_paths = list(changed_paths)
             all_stub_recs, stub_fails = analyze_changed_python_files(

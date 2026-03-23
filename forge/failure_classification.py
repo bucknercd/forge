@@ -117,6 +117,8 @@ def _gate_output_blob(gate_results: list[dict[str, Any]]) -> str:
 
 def _classify_gate_results(
     gate_results: list[dict[str, Any]],
+    *,
+    behavior_heavy: bool = False,
 ) -> FailureClassification | None:
     if not gate_results:
         return None
@@ -179,6 +181,17 @@ def _classify_gate_results(
         signals.append("stub_signal_in_output")
         return FailureClassification("missing_impl", "gates", tuple(signals), {})
 
+    if "no tests ran" in blob or "exit code 5" in blob:
+        signals.append("no_tests_ran")
+        if behavior_heavy:
+            return FailureClassification(
+                "missing_impl",
+                "gates",
+                tuple(signals + ["behavior_heavy_no_tests"]),
+                {},
+            )
+        return FailureClassification("validation_bug", "gates", tuple(signals), {})
+
     if "assertionerror" in blob or "assert " in blob or "failed" in blob:
         signals.append("test_assertion_failure")
         return FailureClassification("behavior_fix", "gates", tuple(signals), {})
@@ -200,6 +213,7 @@ def classify_repair_failure(
     previous_plan_hash: str | None = None,
     current_plan_hash: str | None = None,
     planner_metadata: dict[str, Any] | None = None,
+    behavior_heavy: bool = False,
 ) -> FailureClassification:
     """
     Produce a single repair mode. ``no_op_repair`` wins when the replan is identical
@@ -235,7 +249,7 @@ def classify_repair_failure(
         c = _classify_apply_errors(list(apply_errors or []))
         return c or FailureClassification("unknown_failure", "apply", (), {})
 
-    c = _classify_gate_results(list(gate_results or []))
+    c = _classify_gate_results(list(gate_results or []), behavior_heavy=behavior_heavy)
     return c or FailureClassification("unknown_failure", "gates", (), {})
 
 
