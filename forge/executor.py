@@ -58,6 +58,7 @@ from forge.task_plan_synthesis import (
     task_has_nonempty_embedded_forge_actions,
 )
 from forge.task_ir import compile_task_to_ir, plan_is_substantive_for_task
+from forge.project_profile import project_profile_for_task_ir
 from forge.planner import DeterministicPlanner, Planner
 from forge.reviewed_plan import (
     load_reviewed_plan,
@@ -496,6 +497,8 @@ class Executor:
             msg = f"Task {task_id} not found for milestone {milestone_id}."
             _maybe_finalize(msg)
             return {"ok": False, "apply_ok": False, "message": msg}
+        task_ir_for_profile = compile_task_to_ir(task)
+        project_profile = project_profile_for_task_ir(task_ir_for_profile).profile_name
 
         parent_milestone = MilestoneService.get_milestone(milestone_id)
         if not parent_milestone:
@@ -726,6 +729,7 @@ class Executor:
                     gate_results=None,
                     classification=fc.to_dict(),
                     repair_mode=fc.mode,
+                    project_profile=project_profile,
                 )
                 last_failure_phase = "apply"
                 prev_plan_hash = curr_plan_hash
@@ -815,6 +819,7 @@ class Executor:
                     else gen.message,
                     classification=fc.to_dict(),
                     repair_mode=fc.mode,
+                    project_profile=project_profile,
                 )
                 last_failure_phase = "gates"
                 prev_plan_hash = curr_plan_hash
@@ -915,6 +920,7 @@ class Executor:
                     extra_message=None if gen.generated else gen.message,
                     classification=fc.to_dict(),
                     repair_mode=fc.mode,
+                    project_profile=project_profile,
                 )
                 last_failure_phase = "gates"
                 prev_plan_hash = curr_plan_hash

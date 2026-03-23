@@ -77,3 +77,26 @@ if __name__ == "__main__":
 '''
     r = detect_missing_impl("scripts/sum_tool.py", content)
     assert r["is_stub"] is False
+
+
+def test_go_todo_stub_flagged_as_suspicious() -> None:
+    content = """
+package main
+
+func CountErrors(lines []string) int {
+    panic("TODO")
+}
+"""
+    r = detect_missing_impl("src/logcheck.go", content)
+    assert "go_todo_stub" in r["signals"]
+    assert r["is_stub"] is True or r["confidence"] >= 0.6
+
+
+def test_terraform_placeholder_only_flagged() -> None:
+    content = """
+# TODO: implement terraform module
+# placeholder only
+"""
+    r = detect_missing_impl("infra/main.tf", content)
+    assert "tf_placeholder_only" in r["signals"] or "no_meaningful_terraform_blocks" in r["signals"]
+    assert r["is_stub"] is True or r["confidence"] >= 0.6

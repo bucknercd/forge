@@ -112,6 +112,21 @@ def test_repair_prompt_appendix_includes_mode_block():
     assert "classifier mode=" in text
 
 
+def test_repair_prompt_appendix_includes_profile_guidance():
+    ctx = build_repair_context(
+        1,
+        1,
+        2,
+        apply_ok=False,
+        apply_errors=["x"],
+        gate_results=[],
+        project_profile="python",
+    )
+    text = repair_context_to_prompt_appendix(ctx)
+    assert "Project profile guidance (python)" in text
+    assert "import/layout strategy" in text
+
+
 def test_repair_mode_prompt_block_unknown():
     fc = FailureClassification("unknown_failure", "apply", (), {})
     block = repair_mode_prompt_block(fc)

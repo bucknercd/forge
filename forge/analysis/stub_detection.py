@@ -11,6 +11,9 @@ import ast
 import json
 from pathlib import Path
 from typing import Any
+import re
+
+from forge.project_profile import detect_project_profile, stub_signals_for_profile
 
 # Non-comment, non-blank lines below this suggest too little implementation for a typical tool.
 TINY_LOC_THRESHOLD = 18
@@ -128,8 +131,19 @@ def detect_missing_impl(file_path: str, content: str) -> dict[str, Any]:
     signals: list[str] = []
     confidence = 0.0
 
-    if not file_path.endswith(".py"):
-        return {"is_stub": False, "signals": [], "confidence": 0.0}
+    path_l = file_path.lower()
+    if path_l.endswith(".py"):
+        return _detect_missing_impl_python(file_path, content)
+    if path_l.endswith(".go"):
+        return _detect_missing_impl_go(file_path, content)
+    if path_l.endswith(".tf"):
+        return _detect_missing_impl_terraform(file_path, content)
+    return {"is_stub": False, "signals": [], "confidence": 0.0}
+
+
+def _detect_missing_impl_python(file_path: str, content: str) -> dict[str, Any]:
+    signals: list[str] = []
+    confidence = 0.0
 
     loc = _logical_line_count(content)
     if loc < TINY_LOC_THRESHOLD:
@@ -194,23 +208,68 @@ def detect_missing_impl(file_path: str, content: str) -> dict[str, Any]:
     )
     is_stub = structural and confidence >= 0.7
 
-    return {
-        "is_stub": is_stub,
-        "signals": signals,
-        "confidence": confidence,
-    }
+    return {"is_stub": is_stub, "signals": signals, "confidence": confidence}
+
+
+def _detect_missing_impl_go(file_path: str, content: str) -> dict[str, Any]:
+    signals: list[str] = []
+    confidence = 0.0
+    loc = _logical_line_count(content)
+    text_l = content.lower()
+    if loc < 14:
+        signals.append("tiny_file")
+        confidence += 0.28
+    if "todo" in text_l or 'panic("todo' in text_l or "unimplemented" in text_l:
+        signals.append("go_todo_stub")
+        confidence += 0.46
+    has_processing = any(tok in text_l for tok in ("for ", "if ", "switch ", "map[", "range "))
+    if not has_processing:
+        signals.append("no_processing_logic")
+        confidence += 0.22
+    has_only_zero_returns = bool(
+        re.search(r"return\s+(0|nil|false|\"\"|\[\]|\{\})\b", text_l)
+    )
+    if has_only_zero_returns and not has_processing:
+        signals.append("go_unimplemented_logic")
+        confidence += 0.2
+    confidence = min(1.0, round(confidence, 3))
+    is_stub = confidence >= 0.7
+    return {"is_stub": is_stub, "signals": sorted(set(signals)), "confidence": confidence}
+
+
+def _detect_missing_impl_terraform(file_path: str, content: str) -> dict[str, Any]:
+    signals: list[str] = []
+    confidence = 0.0
+    loc = _logical_line_count(content)
+    text_l = content.lower()
+    if loc < 8:
+        signals.append("tiny_file")
+        confidence += 0.3
+    if "todo" in text_l or "placeholder" in text_l:
+        signals.append("tf_placeholder_only")
+        confidence += 0.4
+    has_resource = re.search(r"^\s*resource\s+\"[^\"]+\"\s+\"[^\"]+\"\s*\{", content, re.M) is not None
+    has_var_output = re.search(r"^\s*(variable|output)\s+\"[^\"]+\"\s*\{", content, re.M) is not None
+    if not has_resource and not has_var_output:
+        signals.append("no_meaningful_terraform_blocks")
+        confidence += 0.35
+    confidence = min(1.0, round(confidence, 3))
+    is_stub = confidence >= 0.7
+    return {"is_stub": is_stub, "signals": sorted(set(signals)), "confidence": confidence}
 
 
 def should_analyze_path(file_path: str) -> bool:
-    """Limit to Python under typical product roots (posix rel path or abs)."""
+    """Limit to common source files under typical product roots."""
     p = file_path.replace("\\", "/")
-    for prefix in ("examples/", "src/", "scripts/", "tests/"):
+    if p.endswith(".tf") and "/" not in p:
+        return True
+    for prefix in ("examples/", "src/", "scripts/", "tests/", "infra/"):
         if f"/{prefix}" in f"/{p}" or p.startswith(prefix):
-            return p.endswith(".py")
+            return p.endswith((".py", ".go", ".tf"))
     return False
 
 
-def analyze_changed_python_files(
+def analyze_changed_source_files(
     files_changed: list[str],
     base_dir: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -223,10 +282,6 @@ def analyze_changed_python_files(
     """
     all_records: list[dict[str, Any]] = []
     stub_records: list[dict[str, Any]] = []
-    # Hard-fail without relying on the confidence threshold.
-    # Keep this conservative to avoid false positives for legitimately small but
-    # functional implementations.
-    hard_fail_signals = {"no_processing_logic", "only_main_wrapper"}
     for raw in files_changed:
         p = Path(raw)
         try:
@@ -245,15 +300,27 @@ def analyze_changed_python_files(
         rec = {
             "path": str(p),
             "rel_path": rel,
+            "profile_name": detect_project_profile(file_paths=[rel]).profile_name,
             "is_stub": result["is_stub"],
             "confidence": result["confidence"],
             "signals": list(result["signals"]),
         }
         all_records.append(rec)
+        hard_fail_signals = set(stub_signals_for_profile(rec["profile_name"]))
         has_hard_fail_signal = bool(hard_fail_signals & set(result["signals"]))
         if (result["is_stub"] and float(result["confidence"]) >= 0.7) or has_hard_fail_signal:
             stub_records.append(rec)
     return all_records, stub_records
+
+
+def analyze_changed_python_files(
+    files_changed: list[str],
+    base_dir: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Backward-compatible alias.
+    """
+    return analyze_changed_source_files(files_changed, base_dir)
 
 
 def persist_stub_detection_results(

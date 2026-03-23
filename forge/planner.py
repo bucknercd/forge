@@ -18,6 +18,7 @@ from forge.planner_normalize import (
     normalize_llm_planner_action_line,
     persist_llm_planner_raw_on_failure,
 )
+from forge.project_profile import detect_project_profile, planner_guidance_for_profile
 from forge.vertical_slice_json import extract_vertical_slice_json_text
 
 
@@ -187,6 +188,18 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
     requirements = _doc_excerpt(Paths.REQUIREMENTS_FILE)
     architecture = _doc_excerpt(Paths.ARCHITECTURE_FILE)
     decisions = _doc_excerpt(Paths.DECISIONS_FILE)
+    profile = detect_project_profile(
+        texts=[
+            milestone.title,
+            milestone.objective,
+            milestone.scope,
+            milestone.validation,
+            requirements,
+            architecture,
+            decisions,
+        ]
+    )
+    profile_guide = planner_guidance_for_profile(profile)
     return (
         "You are generating a Forge milestone execution plan.\n"
         "Return ONLY a JSON object with this exact shape:\n"
@@ -217,6 +230,8 @@ def _build_llm_plan_prompt(milestone: Milestone) -> str:
         "- Bounded file paths must start with examples/, src/, scripts/, or tests/.\n"
         "- Allowed targets: requirements, architecture, decisions, milestones.\n"
         "- Prefer a small plan (2-8 actions) that satisfies the milestone.\n\n"
+        f"Detected project profile: {profile.profile_name}\n"
+        f"Profile guidance: {profile_guide}\n\n"
         "Milestone:\n"
         f"- id: {milestone.id}\n"
         f"- title: {milestone.title}\n"

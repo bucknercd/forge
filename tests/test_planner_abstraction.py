@@ -297,3 +297,46 @@ def test_llm_planner_retries_on_malformed_insert_after_separator(tmp_path):
     assert ser["actions"][1]["type"] == "write_file"
     assert llm.calls == 2
     assert any("RETRY REQUIRED" in p for p in llm.prompts[1:])
+
+
+def test_llm_planner_prompt_includes_python_profile_guidance(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Python profile
+- **Objective**: Build Python CLI with pytest
+- **Scope**: src/ and tests/
+- **Validation**: pytest -q
+""",
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    llm = CapturingLLM(json.dumps({"actions": ["write_file src/app.py | def main():\\n    return 0\\n"]}))
+    _ = LLMPlanner(llm, fallback_to_milestone_actions=False).build_plan(milestone)
+    prompt = llm.last_prompt.lower()
+    assert "detected project profile: python" in prompt
+    assert "avoid relative imports such as from ..src" in prompt
+
+
+def test_llm_planner_prompt_includes_go_profile_guidance(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Go profile
+- **Objective**: Build golang service
+- **Scope**: cmd/main.go and *_test.go
+- **Validation**: go test ./...
+""",
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    llm = CapturingLLM(json.dumps({"actions": ["write_file main.go | package main\\nfunc main(){}\\n"]}))
+    _ = LLMPlanner(llm, fallback_to_milestone_actions=False).build_plan(milestone)
+    prompt = llm.last_prompt.lower()
+    assert "detected project profile: go" in prompt
+    assert "go test" in prompt
+    assert "from ..src" not in prompt

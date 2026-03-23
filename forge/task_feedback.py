@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from forge.paths import Paths
+from forge.project_profile import get_project_profile, repair_guidance_for_profile
 
 
 def task_feedback_dir() -> Path:
@@ -46,6 +47,7 @@ def build_repair_context(
     extra_message: str | None = None,
     classification: dict[str, Any] | None = None,
     repair_mode: str | None = None,
+    project_profile: str | None = None,
 ) -> dict[str, Any]:
     """
     Structured context for the next planner call (esp. LLM).
@@ -66,6 +68,8 @@ def build_repair_context(
         ctx["classification"] = classification
     if repair_mode is not None:
         ctx["repair_mode"] = repair_mode
+    if project_profile is not None:
+        ctx["project_profile"] = project_profile
     return ctx
 
 
@@ -120,6 +124,12 @@ def repair_context_to_prompt_appendix(ctx: dict[str, Any]) -> str:
         lines.append(f"Generated artifact test file (may need fixing): {ctx['artifact_test_path']}\n")
     if ctx.get("extra_message"):
         lines.append(f"Note: {ctx['extra_message']}\n")
+    prof = str(ctx.get("project_profile") or "").strip().lower()
+    if prof:
+        p = get_project_profile(prof)
+        lines.append(
+            f"Project profile guidance ({p.profile_name}): {repair_guidance_for_profile(p)}\n"
+        )
     lines.append(
         "\nFollow the repair mode constraints above. Keep changes minimal and bounded to allowed paths.\n"
     )
