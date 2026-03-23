@@ -7,6 +7,8 @@ changes per :class:`~forge.failure_classification.FailureClassification`.
 
 from __future__ import annotations
 
+from typing import Any
+
 from forge.failure_classification import FailureClassification, RepairMode
 
 _MODE_BLOCKS: dict[RepairMode, str] = {
@@ -33,10 +35,11 @@ _MODE_BLOCKS: dict[RepairMode, str] = {
     ),
     "missing_impl": (
         "### REPAIR MODE: missing_impl\n"
-        "Output looks like stubs, TODOs, or NotImplemented paths while checks stayed shallow.\n"
-        "- Replace placeholder logic with a real minimal implementation that satisfies "
-        "the task objective and gates.\n"
-        "- Do not add new files unless necessary; prefer completing existing scaffolding.\n"
+        "The implementation is insufficient: it may pass shallow checks but omits required "
+        "behavior (e.g. file I/O, parsing, or core logic).\n"
+        "- Replace placeholder / CLI-only scaffolding with real logic that satisfies the "
+        "milestone objective and validation.\n"
+        "- Do not add new files unless necessary; prefer completing existing modules.\n"
     ),
     "validation_bug": (
         "### REPAIR MODE: validation_bug\n"
@@ -69,6 +72,30 @@ _MODE_BLOCKS: dict[RepairMode, str] = {
 }
 
 
+def _stub_detection_prompt_extra(details: dict[str, Any]) -> str:
+    if not details.get("stub_detection_results"):
+        return ""
+    lines = [
+        "\n### STUB DETECTION (Forge deterministic analysis)\n",
+        "The previous implementation is only a structural stub and does not implement "
+        "required behavior.\n",
+        "You must implement full logic, not CLI scaffolding (argparse/main alone is not enough).\n",
+    ]
+    req = (details.get("requirement_summary") or "").strip()
+    if req:
+        lines.append("\n**Requirement summary (from milestone):**\n" + req + "\n")
+    lines.append("\n**Per-file signals:**\n")
+    for r in details["stub_detection_results"]:
+        lines.append(
+            f"  - {r.get('rel_path')}: confidence={r.get('confidence')!r} "
+            f"signals={r.get('signals')!r}\n"
+        )
+    art = (details.get("stub_detection_artifact") or "").strip()
+    if art:
+        lines.append(f"\nFull JSON: {art}\n")
+    return "".join(lines)
+
+
 def repair_mode_prompt_block(classification: FailureClassification) -> str:
     """LLM-facing block for this classification (internal prompt text only)."""
     base = _MODE_BLOCKS.get(classification.mode, _MODE_BLOCKS["unknown_failure"])
@@ -76,4 +103,7 @@ def repair_mode_prompt_block(classification: FailureClassification) -> str:
         f"\n(classifier mode={classification.mode!r} phase={classification.phase!r} "
         f"signals={list(classification.signals)!r})\n"
     )
-    return base + meta
+    stub_x = ""
+    if classification.mode == "missing_impl":
+        stub_x = _stub_detection_prompt_extra(classification.details)
+    return base + meta + stub_x

@@ -1,9 +1,10 @@
 from datetime import datetime
+import collections
 import json
 import re
 import shlex
 import sys
-import collections
+import uuid
 from pathlib import Path
 from typing import Any
 from forge.paths import Paths
@@ -36,6 +37,10 @@ from forge.failure_classification import (
     FailureClassification,
     classify_repair_failure,
     detect_identical_repair_plan,
+)
+from forge.analysis.stub_detection import (
+    analyze_changed_python_files,
+    persist_stub_detection_results,
 )
 from forge.task_feedback import build_repair_context, persist_task_feedback
 from forge.run_events import (
@@ -699,6 +704,77 @@ class Executor:
                 prev_plan_hash = curr_plan_hash
                 continue
 
+            # Post-gate stub detection (deterministic): fail if product Python is scaffold-only.
+            fc_run_id = (getattr(event_bus, "run_id", "") or "").strip() or uuid.uuid4().hex[:16]
+            changed_paths = list(apply_res.get("files_changed") or [])
+            all_stub_recs, stub_fails = analyze_changed_python_files(
+                changed_paths, Paths.BASE_DIR
+            )
+            stub_artifact_path = persist_stub_detection_results(
+                Paths.BASE_DIR, fc_run_id, all_stub_recs
+            )
+            if stub_fails:
+                last_message = (
+                    "Stub detection: implementation looks like a structural scaffold "
+                    "without required behavior (missing core logic). Files: "
+                    + ", ".join(r["rel_path"] for r in stub_fails)
+                )
+                sig_union = sorted({s for r in stub_fails for s in r.get("signals") or []})
+                stub_gate = {
+                    "name": "stub_detection",
+                    "ok": False,
+                    "message": last_message,
+                    "details": {
+                        "stub_files": stub_fails,
+                        "artifact_path": str(stub_artifact_path),
+                        "run_id": fc_run_id,
+                    },
+                }
+                gates_with_stub = list(gates) + [stub_gate]
+                fc = FailureClassification(
+                    "missing_impl",
+                    "gates",
+                    ("stub_detection",) + tuple(sig_union),
+                    {
+                        "stub_detection_results": stub_fails,
+                        "stub_detection_artifact": str(stub_artifact_path),
+                        "requirement_summary": (parent_milestone.objective or "").strip()[
+                            :1200
+                        ],
+                    },
+                )
+                last_failure_classification = fc.to_dict()
+                persist_task_feedback(
+                    milestone_id,
+                    task_id,
+                    attempt,
+                    {
+                        "phase": "stub_detection",
+                        "plan_id": plan_id,
+                        "gate_results": gates_with_stub,
+                        "stub_detection": {
+                            "artifact_path": str(stub_artifact_path),
+                            "failing_files": stub_fails,
+                        },
+                        "classification": fc.to_dict(),
+                    },
+                )
+                repair_context = build_repair_context(
+                    milestone_id,
+                    task_id,
+                    attempt,
+                    apply_ok=True,
+                    apply_errors=[],
+                    gate_results=gates_with_stub,
+                    artifact_test_path=gen.rel_path,
+                    extra_message=None if gen.generated else gen.message,
+                    classification=fc.to_dict(),
+                    repair_mode=fc.mode,
+                )
+                last_failure_phase = "gates"
+                prev_plan_hash = curr_plan_hash
+                continue
+
             payload = load_reviewed_plan(plan_id)
             if payload is None:
                 last_message = f"Reviewed plan '{plan_id}' missing after apply."
@@ -1239,6 +1315,35 @@ class Executor:
                 event_bus=bus,
             )
             gates_ok = all(g.get("ok") for g in gates) if gates else True
+            if apply_ok and gates_ok:
+                fc_run_id = (getattr(event_bus, "run_id", "") or "").strip() or uuid.uuid4().hex[
+                    :16
+                ]
+                changed_paths = apply_result.normalized_files_changed()
+                all_stub_recs, stub_fails = analyze_changed_python_files(
+                    changed_paths, Paths.BASE_DIR
+                )
+                _stub_art = persist_stub_detection_results(
+                    Paths.BASE_DIR, fc_run_id, all_stub_recs
+                )
+                if stub_fails:
+                    sg_msg = (
+                        "Stub detection: structural scaffold without required behavior. "
+                        + ", ".join(r["rel_path"] for r in stub_fails)
+                    )
+                    gates = list(gates) + [
+                        {
+                            "name": "stub_detection",
+                            "ok": False,
+                            "message": sg_msg,
+                            "details": {
+                                "stub_files": stub_fails,
+                                "artifact_path": str(_stub_art),
+                                "run_id": fc_run_id,
+                            },
+                        }
+                    ]
+                    gates_ok = False
             if run_any_gate:
                 bus.emit(
                     PHASE_COMPLETED,
