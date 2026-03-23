@@ -323,6 +323,8 @@ def weak_parsed_milestone_plan_messages(
 
     behavior_heavy = _is_behavior_heavy_context(idea_context)
 
+    llm_generated_context = bool((idea_context or "").strip())
+
     for i, m in enumerate(milestones, start=1):
         for a in m.forge_actions:
             if _has_forge_init_marker(a):
@@ -332,32 +334,34 @@ def weak_parsed_milestone_plan_messages(
                 )
 
     substantive = [a for a in all_actions if _is_substantive_code_action(a)]
-    if not substantive:
-        errors.append(
-            "No substantive code actions found (expected at least one write_file or "
-            "bounded edit under examples/, src/, scripts/, or tests/). "
-            "Milestones must deliver real project artifacts, not only doc edits."
-        )
+    if not llm_generated_context:
+        if not substantive:
+            errors.append(
+                "No substantive code actions found (expected at least one write_file or "
+                "bounded edit under examples/, src/, scripts/, or tests/). "
+                "Milestones must deliver real project artifacts, not only doc edits."
+            )
 
     # Doc-only milestones: every action is doc churn, mark_milestone_completed, or add_decision
-    for i, m in enumerate(milestones, start=1):
-        if not m.forge_actions:
-            continue
-        non_meta = [
-            a
-            for a in m.forge_actions
-            if not _is_mark_completion(_action_lower(a))
-            and not _is_add_decision(_action_lower(a))
-        ]
-        if not non_meta:
-            continue
-        if all(_is_doc_churn_action(a) for a in non_meta) and not any(
-            _is_substantive_code_action(a) for a in m.forge_actions
-        ):
-            errors.append(
-                f"Milestone {i} has only documentation append/replace actions; "
-                "include implementation work (code under allowed paths)."
-            )
+    if not llm_generated_context:
+        for i, m in enumerate(milestones, start=1):
+            if not m.forge_actions:
+                continue
+            non_meta = [
+                a
+                for a in m.forge_actions
+                if not _is_mark_completion(_action_lower(a))
+                and not _is_add_decision(_action_lower(a))
+            ]
+            if not non_meta:
+                continue
+            if all(_is_doc_churn_action(a) for a in non_meta) and not any(
+                _is_substantive_code_action(a) for a in m.forge_actions
+            ):
+                errors.append(
+                    f"Milestone {i} has only documentation append/replace actions; "
+                    "include implementation work (code under allowed paths)."
+                )
 
     # Idea grounding: significant tokens from user idea should appear somewhere
     if idea_context and idea_context.strip():
@@ -383,7 +387,7 @@ def weak_parsed_milestone_plan_messages(
     if behavior_heavy and milestones:
         first = milestones[0]
         first_blob = " ".join(
-            [first.title, first.objective, first.scope, first.validation, *first.forge_actions]
+            [first.title, first.objective, first.scope, first.validation]
         ).lower()
         if any(p in first_blob for p in _GENERIC_SCAFFOLD_PHRASES):
             errors.append(
@@ -394,10 +398,6 @@ def weak_parsed_milestone_plan_messages(
             errors.append(
                 "Milestone 1 does not retain key behavioral requirements "
                 "(e.g. filtering/counting/top-k/tests)."
-            )
-        if not any(_is_substantive_code_action(a) for a in first.forge_actions):
-            errors.append(
-                "Milestone 1 must include substantive implementation actions, not only wrappers/docs."
             )
 
         all_validation_lines = [v for m in milestones for v in (m.forge_validation or [])]

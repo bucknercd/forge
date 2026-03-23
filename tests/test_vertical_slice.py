@@ -199,6 +199,111 @@ def test_vertical_slice_demo_creates_runnable_cli(tmp_path, monkeypatch):
     assert "def main" in todo.read_text(encoding="utf-8")
 
 
+def test_vertical_slice_strips_embedded_forge_actions_and_fails_stub(tmp_path, monkeypatch):
+    """
+    Regression:
+    - LLM milestones must not embed execution (Forge Actions).
+    - Implementation must be produced by the planner, not milestone text.
+    - Stub-only implementations are rejected via stub_detection (missing_impl).
+    """
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.initialize_project()
+
+    class _CountingPlannerLLM(LLMClient):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, prompt: str) -> str:
+            self.calls += 1
+            # Stub scaffold: argparse only, no file I/O, no loops.
+            code = (
+                "import argparse\n"
+                "\n"
+                "def main():\n"
+                "    parser = argparse.ArgumentParser(prog='logcheck')\n"
+                "    parser.add_argument('path')\n"
+                "    _args = parser.parse_args()\n"
+                "    print('logcheck stub')\n"
+                "\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n"
+            )
+            actions = [
+                # Ensure stub_detection classifies this as only-CLI scaffold.
+                "write_file src/logcheck.py | "
+                + code.replace("\n", "\\n"),
+                "mark_milestone_completed",
+            ]
+            return json.dumps({"actions": actions})
+
+        @property
+        def client_id(self) -> str:
+            return "planner_stub_counter"
+
+    docs_llm_payload = {
+        "vision": "logcheck vision",
+        "requirements_md": "# Requirements\n\nImplement logcheck.\n",
+        "architecture_md": "# Architecture\n\nlogcheck CLI.\n",
+        "milestones_md": """# Milestones
+
+## Milestone 1: Logcheck slice
+- **Objective**: Implement logcheck behavior (filter/count ERROR lines).
+- **Scope**: src/ and tests/
+- **Validation**: filter ERROR lines and count occurrences (top-k).
+
+- **Forge Actions**:
+  - write_file src/logcheck.py | def main():\\n    print('stub')\\n
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains src/logcheck.py argparse
+  - path_file_contains src/logcheck.py def main
+""",
+    }
+
+    docs_client = _FakeVerticalSliceLLM(docs_llm_payload)
+    planner_llm = _CountingPlannerLLM()
+
+    from forge.planner import LLMPlanner
+    from forge.policy_config import PlannerPolicy
+
+    def _fake_resolve_planner(mode_override: str | None = None):
+        # Always return an LLM planner that uses our stub planner LLM.
+        return (
+            LLMPlanner(planner_llm, fallback_to_milestone_actions=False),
+            PlannerPolicy(mode="llm", llm_client="stub"),
+            None,
+        )
+
+    monkeypatch.setattr("forge.vertical_slice.resolve_docs_llm_client", lambda: (docs_client, None))
+    monkeypatch.setattr("forge.vertical_slice.resolve_planner", _fake_resolve_planner)
+
+    out = run_vertical_slice(
+        demo=False,
+        idea="build logcheck for syslog",
+        fixed_vision=None,
+        milestone_id=1,
+        planner_mode="deterministic",
+        gate_validate=True,
+        gate_test_cmd=None,
+        disable_gate_test_cmd=True,
+        gate_test_timeout_seconds=None,
+        gate_test_output_max_chars=None,
+    )
+
+    assert out["ok"] is False
+    apply_stage = next(s for s in out["stages"] if s.get("stage") == "apply_plan")
+    fc = apply_stage.get("failure_classification") or {}
+    assert fc.get("mode") == "missing_impl"
+
+    # Embedded execution must be stripped from the generated milestones spec.
+    md = (tmp_path / "docs" / "milestones.md").read_text(encoding="utf-8")
+    assert "write_file" not in md
+
+    # Planner must be invoked to generate the implementation code.
+    assert planner_llm.calls >= 1
+
+
 def test_vertical_slice_emits_core_events_to_jsonl(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)

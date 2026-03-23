@@ -822,7 +822,32 @@ class Executor:
 
             # Post-gate stub detection (deterministic): fail if product Python is scaffold-only.
             fc_run_id = (getattr(event_bus, "run_id", "") or "").strip() or uuid.uuid4().hex[:16]
-            changed_paths = list(apply_res.get("files_changed") or [])
+            changed_paths = set(apply_res.get("files_changed") or [])
+
+            # If a follow-up repair attempt re-applies an identical stub, write_file
+            # actions can become noops and apply_res.files_changed may be empty.
+            # To avoid false success, always analyze python files targeted by the
+            # reviewed plan actions.
+            try:
+                stub_payload = load_reviewed_plan(plan_id)
+                stub_plan: ExecutionPlan | None = (
+                    ExecutionPlan.from_serializable(stub_payload["plan"])
+                    if stub_payload and stub_payload.get("plan")
+                    else None
+                )
+            except Exception:  # noqa: BLE001
+                stub_plan = None
+
+            if stub_plan is not None:
+                for a in stub_plan.actions:
+                    rel = getattr(a, "rel_path", None)
+                    if not isinstance(rel, str) or not rel.endswith(".py"):
+                        continue
+                    if type(a).__name__ == "ActionWriteFile" and rel.startswith("examples/"):
+                        rel = "src/" + rel[len("examples/") :]
+                    changed_paths.add(str(Paths.BASE_DIR / rel))
+
+            changed_paths = list(changed_paths)
             all_stub_recs, stub_fails = analyze_changed_python_files(
                 changed_paths, Paths.BASE_DIR
             )
@@ -1563,7 +1588,22 @@ class Executor:
                 fc_run_id = (getattr(event_bus, "run_id", "") or "").strip() or uuid.uuid4().hex[
                     :16
                 ]
-                changed_paths = apply_result.normalized_files_changed()
+                changed_paths = set(apply_result.normalized_files_changed())
+                # Also analyze targeted python files even when write_file is a noop.
+                # This prevents false-success when an earlier attempt wrote a scaffold
+                # but later attempts re-apply an identical stub (no further diffs).
+                for a in reviewed_plan.actions:
+                    rel = getattr(a, "rel_path", None)
+                    if not isinstance(rel, str):
+                        continue
+                    if not rel.endswith(".py"):
+                        continue
+                    # Mirror write_file canonicalization (examples/ -> src/) for analysis.
+                    if type(a).__name__ == "ActionWriteFile" and rel.startswith("examples/"):
+                        rel = "src/" + rel[len("examples/") :]
+                    changed_paths.add(str(Paths.BASE_DIR / rel))
+
+                changed_paths = list(changed_paths)
                 all_stub_recs, stub_fails = analyze_changed_python_files(
                     changed_paths, Paths.BASE_DIR
                 )

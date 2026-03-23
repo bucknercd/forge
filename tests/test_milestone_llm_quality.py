@@ -13,7 +13,7 @@ from forge.milestone_llm_quality import (
     weak_parsed_milestone_plan_messages,
     weak_synthesized_json_plan_messages,
 )
-from forge.vertical_slice import finalize_llm_milestones_md, run_vertical_slice
+from forge.vertical_slice import canonical_milestones_md_from_llm_raw, finalize_llm_milestones_md, run_vertical_slice
 
 # Observed in the wild: LLM omits the leading "- " on **Forge Validation**:, so the parser
 # stays inside Forge Actions and errors on the validation bullet line.
@@ -101,17 +101,29 @@ def test_finalize_accepts_normalized_markdown():
 - **Scope**: examples/ only.
 - **Validation**: Module exists.
 
-### Forge Actions
-  - write_file examples/logcheck.py | def main():\\n    print('logcheck')\\n
-  - mark_milestone_completed
-### Forge Validation
-  - path_file_contains examples/logcheck.py logcheck
 """
     out, _ = finalize_llm_milestones_md(
         raw_ok,
         source_context="Build logcheck Python CLI",
     )
-    assert "examples/logcheck.py" in out
+    # Spec-only milestones should be accepted as-is (Forge Actions are optional/stripped later).
+    assert "## Milestone 1: T" in out
+
+
+def test_canonicalization_strips_embedded_forge_actions_for_generated_milestones():
+    raw = """# Milestones
+
+## Milestone 1: Bad embedded execution
+- **Objective**: Build logcheck behavior.
+- **Scope**: src/ and tests/
+- **Validation**: verify filtering and counting behavior
+- **Forge Actions**:
+  - write_file src/logcheck.py | def main():\\n    pass\\n
+  - mark_milestone_completed
+"""
+    out, _warns = canonical_milestones_md_from_llm_raw(raw, source_context="Build logcheck")
+    assert "Forge Actions" not in out
+    assert "write_file" not in out
 
 
 def test_weak_parsed_rejects_forge_init_only():

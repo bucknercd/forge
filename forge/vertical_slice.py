@@ -26,8 +26,8 @@ from forge.policy_config import (
     merge_planner_policy,
     merge_reviewed_apply_policy,
 )
-from forge.planner import DeterministicPlanner, Planner
-from forge.task_plan_synthesis import task_has_nonempty_embedded_forge_actions
+from forge.planner import Planner
+from forge.task_ir import compile_task_to_ir
 from forge.run_events import (
     ARTIFACT_WRITTEN,
     PHASE_COMPLETED,
@@ -436,6 +436,8 @@ def finalize_llm_milestones_md(
         repaired, repair_warnings = repair_llm_milestones_md(folded)
         all_warnings = [*norm_warnings, *fold_warnings, *repair_warnings]
         parsed = MilestoneService.parse_milestones(repaired)
+        if not parsed:
+            raise ValueError("No milestones parsed from milestones_md markdown.")
     except ValueError as exc:
         if failure_artifact_dir is not None:
             _persist_milestone_md_failure_artifacts(
@@ -478,9 +480,37 @@ def canonical_milestones_md_from_llm_raw(
     ``data[\"milestones_md\"]`` from the LLM payload. :func:`materialize_bundle` then writes
     that same string to ``docs/milestones.md``.
     """
-    return finalize_llm_milestones_md(
+    def _strip_forge_actions(md: str) -> str:
+        lines = md.splitlines()
+        out: list[str] = []
+        skipping = False
+        for line in lines:
+            stripped = line.strip()
+            lower = stripped.lower()
+
+            if lower == "- **forge actions**:":
+                skipping = True
+                continue
+
+            if skipping:
+                if lower == "- **forge validation**:":
+                    skipping = False
+                    out.append(line)
+                elif stripped.startswith("## Milestone"):
+                    skipping = False
+                    out.append(line)
+                else:
+                    continue
+            else:
+                out.append(line)
+
+        return "\n".join(out) + ("\n" if md.endswith("\n") else "")
+
+    repaired, warns = finalize_llm_milestones_md(
         raw_milestones_md, source_context=source_context
     )
+    repaired_stripped = _strip_forge_actions(repaired)
+    return repaired_stripped, warns
 
 
 def _product_docs_rules_block() -> str:
@@ -509,14 +539,7 @@ def _milestones_strict_example_block() -> str:
         "filter ERROR lines and count occurrences.\n"
         "- **Scope**: Python code under src/ plus tests under tests/ (use examples/ only if explicitly requested).\n"
         "- **Validation**: Includes at least one behavior-oriented check (e.g. filtering/counting/top-k output), "
-        "not only structure/import/argparse checks.\n"
-        "- **Forge Actions**:\n"
-        "  - write_file src/sample_cli.py | def count_errors(lines):\\n    out = {}\\n    for ln in lines:\\n        if 'ERROR' in ln:\\n            out[ln] = out.get(ln, 0) + 1\\n    return out\\n\n"
-        "  - write_file tests/test_sample_cli.py | def test_count_errors_filters_non_error():\\n    lines = ['INFO ok', 'ERROR bad', 'DEBUG n']\\n    out = count_errors(lines)\\n    assert sum(out.values()) == 1\\n\n"
-        "  - mark_milestone_completed\n"
-        "- **Forge Validation**:\n"
-        "  - path_file_contains src/sample_cli.py count_errors\n"
-        "  - path_file_contains tests/test_sample_cli.py test_count_errors\n\n"
+        "not only structure/import/argparse checks.\n\n"
     )
 
 
@@ -530,16 +553,8 @@ def _milestones_rules_block() -> str:
         "examples/, src/, scripts/, or tests/ that implements the idea.\n"
         "- FORBIDDEN as the primary plan: only append_section/replace_section into docs, "
         "FORGE_INIT_MARKER, or mark_milestone_completed with no real code artifact.\n"
-        "- Use literal header lines '- **Forge Actions**:' and '- **Forge Validation**:' "
-        "(with colon). Sub-actions are markdown list items starting with two spaces then '- '.\n"
-        "- Include '- **Forge Actions**:' with one or more actions using ONLY:\n"
-        "  append_section, replace_section, write_file, insert_after_in_file, insert_before_in_file,\n"
-        "  replace_text_in_file, replace_block_in_file, replace_lines_in_file, add_decision, mark_milestone_completed\n"
-        "- write_file format: write_file <rel_path> | <body with literal backslash-n for newlines>\n"
-        "- Bounded edits: use @@FORGE@@ separators; optional trailing | occurrence=N must_be_unique=false line_match=true\n"
-        "- Paths MUST start with examples/, src/, scripts/, or tests/.\n"
-        "- Include '- **Forge Validation**:' with file_contains / section_contains / "
-        "path_file_contains rules.\n"
+        "- DO NOT include '- **Forge Actions**:' blocks in generated milestones.\n"
+        "- Milestones in this phase are specification-only and must not embed execution instructions.\n"
         "- For behavior-heavy projects, validation must include at least one behavior-oriented rule "
         "(filter/count/aggregate/top-k/ignore-levels/tests), not only file existence or argparse/unittest.\n"
         "- Reject placeholder tests: do not emit tests that only contain pass/TODO/TBD/placeholder comments.\n"
@@ -1115,24 +1130,22 @@ def run_vertical_slice(
         bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
-    if task_has_nonempty_embedded_forge_actions(nt):
-        plan_planner = DeterministicPlanner()
-    else:
-        plan_planner, _, plan_resolve_err = resolve_planner(mode_override=planner_mode)
-        if plan_resolve_err or plan_planner is None:
-            msg = plan_resolve_err or "Planner unavailable."
-            stages.append(
-                {
-                    "stage": "preview_save_plan",
-                    "ok": False,
-                    "message": msg,
-                }
-            )
-            bus.emit(RUN_FAILED, reason=msg, phase="plan")
-            bus.emit(RUN_COMPLETED, ok=False)
-            return _finalize(stages, ok=False)
+    task_ir = compile_task_to_ir(nt)
+    force_llm_for_impl = (
+        task_ir.task_type in {"behavioral", "structural"} and not task_ir.has_embedded_actions
+    )
 
-    apply_planner, _, apply_resolve_err = resolve_planner(mode_override=planner_mode)
+    plan_mode = "llm" if force_llm_for_impl else planner_mode
+
+    plan_planner, _, plan_resolve_err = resolve_planner(mode_override=plan_mode)
+    if plan_resolve_err or plan_planner is None:
+        msg = plan_resolve_err or "Planner unavailable."
+        stages.append({"stage": "preview_save_plan", "ok": False, "message": msg})
+        bus.emit(RUN_FAILED, reason=msg, phase="plan")
+        bus.emit(RUN_COMPLETED, ok=False)
+        return _finalize(stages, ok=False)
+
+    apply_planner, _, apply_resolve_err = resolve_planner(mode_override=plan_mode)
     if apply_resolve_err or apply_planner is None:
         apply_planner = plan_planner
 

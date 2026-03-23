@@ -223,6 +223,10 @@ def analyze_changed_python_files(
     """
     all_records: list[dict[str, Any]] = []
     stub_records: list[dict[str, Any]] = []
+    # Hard-fail without relying on the confidence threshold.
+    # Keep this conservative to avoid false positives for legitimately small but
+    # functional implementations.
+    hard_fail_signals = {"no_processing_logic", "only_main_wrapper"}
     for raw in files_changed:
         p = Path(raw)
         try:
@@ -246,7 +250,8 @@ def analyze_changed_python_files(
             "signals": list(result["signals"]),
         }
         all_records.append(rec)
-        if result["is_stub"] and float(result["confidence"]) >= 0.7:
+        has_hard_fail_signal = bool(hard_fail_signals & set(result["signals"]))
+        if (result["is_stub"] and float(result["confidence"]) >= 0.7) or has_hard_fail_signal:
             stub_records.append(rec)
     return all_records, stub_records
 

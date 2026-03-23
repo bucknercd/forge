@@ -54,6 +54,13 @@ class Validator:
         if not str(result.get("summary", "")).strip():
             return False, f"Milestone {milestone_id} result summary is empty."
 
+        applied = result.get("actions_applied") or []
+        if not applied:
+            return False, (
+                f"Milestone {milestone_id} applied no actions (empty execution plan). "
+                f"{_milestones_fix_hint()}"
+            )
+
         milestone = MilestoneService.get_milestone(milestone_id)
         if not milestone:
             return False, f"Milestone {milestone_id} not found during validation."
@@ -69,13 +76,8 @@ class Validator:
                 f"{_MILESTONES_DOC}).{_milestones_fix_hint()}"
             )
 
-        if not milestone.forge_actions:
-            return False, (
-                f"Milestone {milestone_id} has no Forge Actions. "
-                f"Add a '- **Forge Actions**:' block with deterministic actions in "
-                f"{_MILESTONES_DOC}.{_milestones_fix_hint()}"
-            )
-
+        # Milestones may be spec-only (no embedded Forge Actions). In that case,
+        # validation rules come from the '- **Forge Validation**:' block (if any).
         if milestone.forge_actions and not milestone.forge_validation:
             return False, (
                 f"Milestone {milestone_id} has Forge Actions but no Forge Validation rules. "
