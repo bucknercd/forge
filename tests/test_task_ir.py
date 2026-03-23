@@ -292,7 +292,7 @@ def test_behavioral_preview_rejects_mark_only_plan(tmp_path):
     assert out.get("failure_type") == "non_substantive_behavioral_plan"
 
 
-def test_behavioral_preview_rejects_under_scoped_filter_only_task(tmp_path):
+def test_behavioral_preview_enriches_under_scoped_filter_only_task(tmp_path):
     configure_project(
         tmp_path,
         """
@@ -327,8 +327,14 @@ def test_behavioral_preview_rejects_under_scoped_filter_only_task(tmp_path):
         ],
     )
     out = Executor.preview_milestone(1, planner=_WriteSrcPlanner(), task_id=1)
-    assert out["ok"] is False
-    assert out.get("failure_type") == "behavioral_task_underscoped"
+    assert out["ok"] is True
+    em = out.get("task_behavior_enrichment") or {}
+    assert em.get("enriched") is True
+    t2 = get_task(1, 1)
+    assert t2 is not None
+    blob = f"{t2.objective} {t2.summary}".lower()
+    assert "count" in blob
+    assert t2.forge_actions == []
 
 
 def test_behavioral_preview_accepts_src_write_plan(tmp_path):

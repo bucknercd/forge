@@ -28,15 +28,19 @@ from forge.execution.models import (
 
 
 TaskType = str  # behavioral | structural | documentation | unknown
-_MIN_BEHAVIOR_DEPTH_SIGNALS = {
-    "count",
-    "aggregate",
-    "transform",
-    "group",
-    "sort",
-    "top 5",
-    "rank",
-}
+
+# Public: used by task shaping / enrichment to align with depth checks.
+MIN_BEHAVIOR_DEPTH_SIGNALS: frozenset[str] = frozenset(
+    {
+        "count",
+        "aggregate",
+        "transform",
+        "group",
+        "sort",
+        "top 5",
+        "rank",
+    }
+)
 
 _BEHAVIOR_SIGNAL_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bcount(?:ing)?\b", "count"),
@@ -244,4 +248,4 @@ def task_ir_has_minimum_behavior_depth(task_ir: TaskIR) -> bool:
         task_ir.summary,
         *task_ir.requirements,
     )
-    return bool(set(intrinsic_signals) & _MIN_BEHAVIOR_DEPTH_SIGNALS)
+    return bool(set(intrinsic_signals) & MIN_BEHAVIOR_DEPTH_SIGNALS)

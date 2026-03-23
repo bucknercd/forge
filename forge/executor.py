@@ -57,6 +57,10 @@ from forge.task_plan_synthesis import (
     synthesize_execution_plan_from_task,
     task_has_nonempty_embedded_forge_actions,
 )
+from forge.task_behavior_enrichment import (
+    enrich_behavioral_task_if_needed,
+    persist_enriched_task,
+)
 from forge.task_ir import (
     compile_task_to_ir,
     plan_is_substantive_for_task,
@@ -1281,19 +1285,35 @@ class Executor:
                 ),
                 "milestone_id": milestone_id,
             }
+
+        vision_text: str | None = None
+        try:
+            vf = Paths.VISION_FILE
+            if vf.is_file():
+                vision_text = vf.read_text(encoding="utf-8")[:4000]
+        except OSError:
+            vision_text = None
+
+        task, enrich_meta = enrich_behavioral_task_if_needed(
+            task, parent, vision_text=vision_text
+        )
+        if enrich_meta.get("enriched"):
+            persist_enriched_task(milestone_id, task)
+
         task_ir = compile_task_to_ir(task)
         if not task_ir_has_minimum_behavior_depth(task_ir):
             return {
                 "ok": False,
                 "message": (
                     f"Rejected task m{milestone_id}-t{task_id}: behavioral task is under-scoped "
-                    "and lacks aggregation/transform intent "
+                    "even after enrichment from milestone/vision "
                     "(count/aggregate/group/sort/top/rank/transform)."
                 ),
                 "milestone_id": milestone_id,
                 "task_id": task_id,
                 "failure_type": "behavioral_task_underscoped",
                 "task_ir": task_ir.to_dict(),
+                "task_behavior_enrichment": enrich_meta,
             }
         milestone = task_to_execution_milestone(parent, task)
 
@@ -1346,6 +1366,8 @@ class Executor:
 
         assert plan is not None and planner_meta is not None
         plan.task_id = task_id
+        if enrich_meta.get("enriched") or enrich_meta.get("phases_tried"):
+            planner_meta["task_behavior_enrichment"] = enrich_meta
 
         pol_b, pol_err = load_planner_policy()
         if pol_err:
@@ -1393,6 +1415,7 @@ class Executor:
         }
         out["task_id"] = task_id
         out["task_ir"] = task_ir.to_dict()
+        out["task_behavior_enrichment"] = enrich_meta
         return out
 
     @staticmethod
