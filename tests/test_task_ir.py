@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from forge.execution.models import (
+    ActionInsertAfterInFile,
     ActionMarkMilestoneCompleted,
     ActionWriteFile,
     ExecutionPlan,
 )
+from forge.design_manager import MilestoneService
+from forge.executor import Executor
+from forge.planner import Planner
+from forge.reviewed_plan import save_reviewed_plan
 from forge.task_ir import compile_task_to_ir, plan_is_substantive_for_task
-from forge.task_service import Task
+from forge.task_service import Task, ensure_tasks_for_milestone, get_task, save_tasks
+from tests.forge_test_project import configure_project
 
 
 def _task(
@@ -115,6 +121,25 @@ def test_behavioral_task_write_file_substantive():
     assert plan_is_substantive_for_task(ir, plan) is True
 
 
+def test_behavioral_task_tests_only_is_substantive():
+    t = _task(
+        summary="logcheck",
+        objective="count and filter errors",
+        validation="verify counting",
+    )
+    ir = compile_task_to_ir(t)
+    plan = ExecutionPlan(
+        milestone_id=1,
+        actions=[
+            ActionWriteFile(
+                "tests/test_logcheck.py",
+                "def test_behavior():\n    assert True\n",
+            )
+        ],
+    )
+    assert plan_is_substantive_for_task(ir, plan) is True
+
+
 def test_structural_task_threshold_explicit():
     t = _task(
         summary="Scaffold module",
@@ -123,4 +148,279 @@ def test_structural_task_threshold_explicit():
     )
     ir = compile_task_to_ir(t)
     plan = ExecutionPlan(milestone_id=1, actions=[ActionMarkMilestoneCompleted()])
-    assert plan_is_substantive_for_task(ir, plan) is False
+    assert plan_is_substantive_for_task(ir, plan) is True
+
+
+def test_behavioral_task_edit_action_substantive():
+    t = _task(
+        summary="logcheck",
+        objective="count and filter errors",
+        validation="verify counting",
+    )
+    ir = compile_task_to_ir(t)
+    plan = ExecutionPlan(
+        milestone_id=1,
+        actions=[
+            ActionInsertAfterInFile(
+                rel_path="src/logcheck.py",
+                anchor="def main():",
+                insertion="    return 1\n",
+            )
+        ],
+    )
+    assert plan_is_substantive_for_task(ir, plan) is True
+
+
+class _MarkOnlyPlanner(Planner):
+    mode = "deterministic"
+    stable_for_recheck = True
+
+    def build_plan(self, milestone, *, repair_context=None) -> ExecutionPlan:
+        _ = repair_context
+        return ExecutionPlan(
+            milestone_id=milestone.id, actions=[ActionMarkMilestoneCompleted()]
+        )
+
+
+class _WriteSrcPlanner(Planner):
+    mode = "deterministic"
+    stable_for_recheck = True
+
+    def build_plan(self, milestone, *, repair_context=None) -> ExecutionPlan:
+        _ = repair_context
+        return ExecutionPlan(
+            milestone_id=milestone.id,
+            actions=[
+                ActionWriteFile("src/logcheck.py", "def count_errors():\n    return 1\n"),
+                ActionMarkMilestoneCompleted(),
+            ],
+        )
+
+
+class _WriteTestsOnlyPlanner(Planner):
+    mode = "deterministic"
+    stable_for_recheck = True
+
+    def build_plan(self, milestone, *, repair_context=None) -> ExecutionPlan:
+        _ = repair_context
+        return ExecutionPlan(
+            milestone_id=milestone.id,
+            actions=[
+                ActionWriteFile(
+                    "tests/test_logcheck.py", "def test_behavior():\n    assert True\n"
+                ),
+                ActionMarkMilestoneCompleted(),
+            ],
+        )
+
+
+def test_behavioral_preview_rejects_mark_only_plan(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: B
+- **Objective**: Count ERROR lines and filter DEBUG lines.
+- **Scope**: src/ and tests/.
+- **Validation**: verify counting behavior.
+""",
+    )
+    ensure_tasks_for_milestone(1)
+    t = get_task(1, 1)
+    assert t is not None
+    # Force planner path (no embedded actions), keep behavioral objective.
+    save_tasks(
+        1,
+        [
+            Task(
+                id=t.id,
+                milestone_id=t.milestone_id,
+                title=t.title,
+                objective=t.objective,
+                summary=t.summary,
+                depends_on=list(t.depends_on),
+                files_allowed=t.files_allowed,
+                validation=t.validation,
+                done_when=t.done_when,
+                status=t.status,
+                forge_actions=[],
+                forge_validation=list(t.forge_validation),
+            )
+        ],
+    )
+    out = Executor.preview_milestone(1, planner=_MarkOnlyPlanner(), task_id=1)
+    assert out["ok"] is False
+    assert out.get("failure_type") == "non_substantive_behavioral_plan"
+
+
+def test_behavioral_preview_accepts_src_write_plan(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: B
+- **Objective**: Count and filter log errors.
+- **Scope**: src/ and tests/.
+- **Validation**: verify counting behavior.
+""",
+    )
+    ensure_tasks_for_milestone(1)
+    t = get_task(1, 1)
+    assert t is not None
+    save_tasks(
+        1,
+        [
+            Task(
+                id=t.id,
+                milestone_id=t.milestone_id,
+                title=t.title,
+                objective=t.objective,
+                summary=t.summary,
+                depends_on=list(t.depends_on),
+                files_allowed=t.files_allowed,
+                validation=t.validation,
+                done_when=t.done_when,
+                status=t.status,
+                forge_actions=[],
+                forge_validation=list(t.forge_validation),
+            )
+        ],
+    )
+    out = Executor.preview_milestone(1, planner=_WriteSrcPlanner(), task_id=1)
+    assert out["ok"] is True
+
+
+def test_behavioral_preview_accepts_tests_only_plan(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: B
+- **Objective**: Parse and count errors.
+- **Scope**: src/ and tests/.
+- **Validation**: verify top 5 ranking behavior.
+""",
+    )
+    ensure_tasks_for_milestone(1)
+    t = get_task(1, 1)
+    assert t is not None
+    save_tasks(
+        1,
+        [
+            Task(
+                id=t.id,
+                milestone_id=t.milestone_id,
+                title=t.title,
+                objective=t.objective,
+                summary=t.summary,
+                depends_on=list(t.depends_on),
+                files_allowed=t.files_allowed,
+                validation=t.validation,
+                done_when=t.done_when,
+                status=t.status,
+                forge_actions=[],
+                forge_validation=list(t.forge_validation),
+            )
+        ],
+    )
+    out = Executor.preview_milestone(1, planner=_WriteTestsOnlyPlanner(), task_id=1)
+    assert out["ok"] is True
+
+
+def test_structural_preview_allows_mark_only_plan(tmp_path):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: S
+- **Objective**: Scaffold entrypoint and setup base files.
+- **Scope**: structural setup only.
+- **Validation**: file exists.
+""",
+    )
+    ensure_tasks_for_milestone(1)
+    t = get_task(1, 1)
+    assert t is not None
+    save_tasks(
+        1,
+        [
+            Task(
+                id=t.id,
+                milestone_id=t.milestone_id,
+                title=t.title,
+                objective=t.objective,
+                summary=t.summary,
+                depends_on=list(t.depends_on),
+                files_allowed=t.files_allowed,
+                validation=t.validation,
+                done_when=t.done_when,
+                status=t.status,
+                forge_actions=[],
+                forge_validation=list(t.forge_validation),
+            )
+        ],
+    )
+    out = Executor.preview_milestone(1, planner=_MarkOnlyPlanner(), task_id=1)
+    assert out["ok"] is True
+
+
+def test_apply_reviewed_plan_rejects_non_substantive_behavioral_plan(
+    tmp_path, monkeypatch
+):
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: B
+- **Objective**: Count and filter errors.
+- **Scope**: src/ and tests/.
+- **Validation**: verify counting.
+- **Forge Actions**:
+  - write_file src/logcheck.py | def count_errors():\\n    return 1\\n
+  - mark_milestone_completed
+- **Forge Validation**:
+  - path_file_contains src/logcheck.py count_errors
+""",
+    )
+    ensure_tasks_for_milestone(1)
+    t = get_task(1, 1)
+    assert t is not None
+    save_tasks(
+        1,
+        [
+            Task(
+                id=t.id,
+                milestone_id=t.milestone_id,
+                title=t.title,
+                objective="Count and filter ERROR entries.",
+                summary="Behavior-heavy logcheck task",
+                depends_on=list(t.depends_on),
+                files_allowed=t.files_allowed,
+                validation="verify count/filter behavior",
+                done_when=t.done_when,
+                status=t.status,
+                forge_actions=[],
+                forge_validation=[],
+            )
+        ],
+    )
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+    plan = ExecutionPlan(milestone_id=1, actions=[ActionMarkMilestoneCompleted()])
+    payload = save_reviewed_plan(
+        1,
+        milestone.title,
+        plan,
+        planner_mode="llm",
+        planner_metadata={"mode": "llm", "is_nondeterministic": True},
+        task_id=1,
+    )
+    monkeypatch.setattr("forge.executor.validate_reviewed_plan", lambda *_a, **_k: (True, ""))
+    out = Executor.apply_reviewed_plan(payload["plan_id"])
+    assert out["ok"] is False
+    assert out.get("failure_type") == "non_substantive_behavioral_plan"

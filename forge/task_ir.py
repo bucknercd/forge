@@ -196,5 +196,6 @@ def plan_is_substantive_for_task(task_ir: TaskIR, plan: ExecutionPlan) -> bool:
     if task_ir.task_type == "documentation":
         return any(not isinstance(a, ActionMarkMilestoneCompleted) for a in actions)
     if task_ir.task_type == "structural":
-        return has_substantive
-    return has_substantive
+        # Structural tasks are intentionally less strict (incremental scaffolding allowed).
+        return True
+    return True

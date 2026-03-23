@@ -120,6 +120,56 @@ def _primary_failure_message_from_classification(
     return f"Run failed: {mode} (phase: {phase})."
 
 
+def _plan_action_type_summary(plan: ExecutionPlan) -> list[str]:
+    names: list[str] = []
+    for a in plan.actions:
+        n = type(a).__name__
+        # Match API-ish action naming used elsewhere.
+        if n.startswith("Action"):
+            n = n[len("Action") :]
+        names.append(
+            n.replace("InFile", "_in_file")
+            .replace("MarkMilestoneCompleted", "mark_milestone_completed")
+            .replace("WriteFile", "write_file")
+            .replace("AddDecision", "add_decision")
+            .replace("AppendSection", "append_section")
+            .replace("ReplaceSection", "replace_section")
+            .replace("ReplaceText", "replace_text")
+            .replace("ReplaceBlock", "replace_block")
+            .replace("ReplaceLines", "replace_lines")
+            .replace("InsertAfter", "insert_after")
+            .replace("InsertBefore", "insert_before")
+            .lower()
+        )
+    return names
+
+
+def _behavioral_non_substantive_plan_error(
+    *,
+    milestone_id: int,
+    task_ir: dict[str, Any],
+    plan: ExecutionPlan,
+) -> dict[str, Any]:
+    task_id = int(task_ir.get("task_id", 0) or 0)
+    ttype = str(task_ir.get("task_type", "unknown"))
+    action_types = _plan_action_type_summary(plan)
+    msg = (
+        f"Rejected plan for task m{milestone_id}-t{task_id}: {ttype} task requires "
+        "substantive implementation actions but plan only contains meta/bookkeeping actions. "
+        "Hint: include implementation code edits or behavioral test actions."
+    )
+    return {
+        "ok": False,
+        "apply_ok": False,
+        "message": msg,
+        "failure_type": "non_substantive_behavioral_plan",
+        "phase": "plan",
+        "task_id": task_id,
+        "task_ir": task_ir,
+        "action_summary": action_types,
+    }
+
+
 def _persist_repair_loop_attempt_artifact(
     *,
     milestone_id: int,
@@ -1205,9 +1255,13 @@ class Executor:
         }
 
         warnings = _planner_warnings(planner_meta, plan)
-        if not plan_is_substantive_for_task(task_ir, plan):
-            warnings.append(
-                f"Plan is non-substantive for task type '{task_ir.task_type}'."
+        if task_ir.task_type == "behavioral" and not plan_is_substantive_for_task(
+            task_ir, plan
+        ):
+            return _behavioral_non_substantive_plan_error(
+                milestone_id=milestone_id,
+                task_ir=task_ir.to_dict(),
+                plan=plan,
             )
         applier = ArtifactActionApplier(Paths)
         dry = applier.apply(plan, milestone, dry_run=True)
@@ -1422,6 +1476,29 @@ class Executor:
             return {"ok": False, "message": reason, "plan_id": plan_id, "milestone_id": milestone_id}
 
         reviewed_plan = ExecutionPlan.from_serializable(payload["plan"])
+        if task_id is not None:
+            task_for_ir = get_task(milestone_id, task_id)
+            if task_for_ir is not None:
+                task_ir = compile_task_to_ir(task_for_ir)
+                if (
+                    task_ir.task_type == "behavioral"
+                    and not plan_is_substantive_for_task(task_ir, reviewed_plan)
+                ):
+                    out = _behavioral_non_substantive_plan_error(
+                        milestone_id=milestone_id,
+                        task_ir=task_ir.to_dict(),
+                        plan=reviewed_plan,
+                    )
+                    out.update(
+                        {
+                            "plan_id": plan_id,
+                            "milestone_id": milestone_id,
+                            "planner_mode": payload.get("planner_mode", "deterministic"),
+                            "planner_metadata": payload.get("planner_metadata", {}),
+                            "review_enforcement": payload.get("review_enforcement", {}),
+                        }
+                    )
+                    return out
         applier = ArtifactActionApplier(Paths)
         bus.emit(PHASE_STARTED, phase="apply", label="execute reviewed plan")
         apply_result = applier.apply(
