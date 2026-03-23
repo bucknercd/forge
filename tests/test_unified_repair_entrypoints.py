@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 
 from forge.cli import main
+from forge.design_manager import MilestoneService
+from forge.executor import Executor
 from forge.paths import Paths
-from forge.task_service import get_task
+from forge.policy_config import ReviewedApplyPolicy, TaskExecutionPolicy
+from forge.planner import DeterministicPlanner
+from forge.task_service import ensure_tasks_for_milestone, get_task
 from forge.vertical_slice import run_vertical_slice
 
 
@@ -215,3 +219,115 @@ def test_vertical_slice_demo_repair_exhausted(tmp_path, monkeypatch, capsys):
     nt = get_task(1, 1)
     assert nt is not None
     assert nt.status != "completed"
+
+
+def test_classified_failure_not_masked_by_followup_plan_save_error(
+    tmp_path, monkeypatch, capsys
+):
+    _init_policy_milestone(tmp_path, monkeypatch, capsys)
+    _write_llm_repair_policy(tmp_path)
+    Paths.refresh(tmp_path)
+    plan_id = _save_plan_id(monkeypatch, capsys)
+
+    def always_fail_gates(*_a, **_k):
+        return [
+            {
+                "name": "milestone_validation",
+                "ok": False,
+                "message": "mock",
+                "details": {},
+            }
+        ]
+
+    calls = {"save": 0}
+    orig_save = Executor.save_reviewed_plan_for_task
+
+    def fail_followup_save(*args, **kwargs):
+        calls["save"] += 1
+        if calls["save"] >= 1:
+            return {"ok": False, "message": "Plan save failed."}
+        return orig_save(*args, **kwargs)
+
+    monkeypatch.setattr("forge.executor.run_validation_and_test_commands", always_fail_gates)
+    monkeypatch.setattr(Executor, "save_reviewed_plan_for_task", fail_followup_save)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["forge", "task-apply-plan", plan_id, "--gate-validate", "--json"],
+    )
+    assert main() == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    fc = payload.get("failure_classification") or {}
+    assert fc.get("mode") == "unknown_failure"
+    assert "Run failed: unknown_failure" in payload.get("message", "")
+    assert "Plan save failed" in payload.get("message", "")
+    assert payload.get("secondary_warnings")
+
+
+def test_classified_failure_sets_repair_mode_for_followup_attempt(
+    tmp_path, monkeypatch, capsys
+):
+    _init_policy_milestone(tmp_path, monkeypatch, capsys)
+    _write_llm_repair_policy(tmp_path)
+    Paths.refresh(tmp_path)
+    plan_id = _save_plan_id(monkeypatch, capsys)
+
+    def always_fail_gates(*_a, **_k):
+        return [
+            {
+                "name": "milestone_validation",
+                "ok": False,
+                "message": "mock",
+                "details": {},
+            }
+        ]
+
+    seen_repair_modes: list[str] = []
+    orig_save = Executor.save_reviewed_plan_for_task
+
+    def capture_repair_context(*args, **kwargs):
+        ctx = kwargs.get("repair_context") or {}
+        rm = str((ctx.get("repair_mode") or ""))
+        if rm:
+            seen_repair_modes.append(rm)
+        return orig_save(*args, **kwargs)
+
+    monkeypatch.setattr("forge.executor.run_validation_and_test_commands", always_fail_gates)
+    monkeypatch.setattr(Executor, "save_reviewed_plan_for_task", capture_repair_context)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["forge", "task-apply-plan", plan_id, "--gate-validate", "--json"],
+    )
+    assert main() == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "unknown_failure" in seen_repair_modes
+
+
+def test_no_classification_save_error_stays_primary(tmp_path, monkeypatch, capsys):
+    _init_policy_milestone(tmp_path, monkeypatch, capsys)
+    Paths.refresh(tmp_path)
+    ensure_tasks_for_milestone(1)
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+
+    monkeypatch.setattr(
+        Executor,
+        "save_reviewed_plan_for_task",
+        lambda *a, **k: {"ok": False, "message": "Plan save failed."},
+    )
+    out = Executor.run_task_apply_with_repair_loop(
+        1,
+        1,
+        milestone,
+        planner=DeterministicPlanner(),
+        apply_policy=ReviewedApplyPolicy(run_validation_gate=True),
+        task_exec_policy=TaskExecutionPolicy(artifact_test_generation=False, max_repair_attempts=1),
+        run_milestone_validation=True,
+        initial_plan_id=None,
+        review_enforcement=None,
+        event_bus=None,
+    )
+    assert out["ok"] is False
+    assert out.get("failure_classification") is None
+    assert out.get("message") == "Plan save failed."

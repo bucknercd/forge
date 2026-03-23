@@ -99,6 +99,26 @@ def _build_execution_summary(
     )
 
 
+def _primary_failure_message_from_classification(
+    classification: dict[str, Any] | None,
+    *,
+    fallback: str,
+) -> str:
+    if not classification:
+        return fallback
+    mode = str(classification.get("mode") or "unknown_failure")
+    phase = str(classification.get("phase") or "unknown")
+    details = classification.get("details") or {}
+    if mode == "missing_impl":
+        if details.get("stub_detection_results"):
+            return (
+                "Run failed: missing_impl (stub detection: structural scaffold "
+                "without required behavior)."
+            )
+        return "Run failed: missing_impl (required behavior not fully implemented)."
+    return f"Run failed: {mode} (phase: {phase})."
+
+
 def _persist_repair_loop_attempt_artifact(
     *,
     milestone_id: int,
@@ -439,6 +459,7 @@ class Executor:
         prev_plan_hash: str | None = None
         last_failure_phase: str | None = None
         last_failure_classification: dict[str, Any] | None = None
+        secondary_warnings: list[str] = []
 
         for attempt in range(1, max_rep + 1):
             use_initial = bool(initial_plan_id and attempt == 1)
@@ -487,7 +508,20 @@ class Executor:
                     repair_context=repair_context,
                 )
                 if not save.get("ok"):
-                    last_message = save.get("message", "Plan save failed.")
+                    save_message = str(save.get("message", "Plan save failed."))
+                    # If a classified failure already exists, keep it as primary outcome and
+                    # treat this save error as secondary; retry remaining attempts if any.
+                    if last_failure_classification:
+                        secondary_warnings.append(
+                            f"attempt {attempt}: failed to persist follow-up plan metadata: "
+                            f"{save_message}"
+                        )
+                        last_message = _primary_failure_message_from_classification(
+                            last_failure_classification,
+                            fallback=save_message,
+                        )
+                        continue
+                    last_message = save_message
                     _maybe_finalize(last_message)
                     return {
                         "ok": False,
@@ -497,7 +531,18 @@ class Executor:
                     }
                 plan_id = save.get("plan_id")
                 if not plan_id:
-                    last_message = "No plan_id from save step."
+                    no_id_msg = "No plan_id from save step."
+                    if last_failure_classification:
+                        secondary_warnings.append(
+                            f"attempt {attempt}: failed to persist follow-up plan metadata: "
+                            f"{no_id_msg}"
+                        )
+                        last_message = _primary_failure_message_from_classification(
+                            last_failure_classification,
+                            fallback=no_id_msg,
+                        )
+                        continue
+                    last_message = no_id_msg
                     _maybe_finalize(last_message)
                     return {
                         "ok": False,
@@ -605,6 +650,10 @@ class Executor:
                     planner_metadata=planner_meta,
                 )
                 last_failure_classification = fc.to_dict()
+                last_message = _primary_failure_message_from_classification(
+                    last_failure_classification,
+                    fallback=last_message,
+                )
                 persist_task_feedback(
                     milestone_id,
                     task_id,
@@ -681,6 +730,10 @@ class Executor:
                     planner_metadata=planner_meta,
                 )
                 last_failure_classification = fc.to_dict()
+                last_message = _primary_failure_message_from_classification(
+                    last_failure_classification,
+                    fallback=last_message,
+                )
                 persist_task_feedback(
                     milestone_id,
                     task_id,
@@ -756,6 +809,10 @@ class Executor:
                     },
                 )
                 last_failure_classification = fc.to_dict()
+                last_message = _primary_failure_message_from_classification(
+                    last_failure_classification,
+                    fallback=last_message,
+                )
                 persist_task_feedback(
                     milestone_id,
                     task_id,
@@ -851,6 +908,10 @@ class Executor:
         final_reason = (
             f"Task {task_id} failed after {max_rep} repair attempt(s): {last_message}"
         )
+        if secondary_warnings:
+            final_reason = (
+                f"{final_reason} Warning: {secondary_warnings[-1]}"
+            )
         _maybe_finalize(final_reason)
         return {
             "ok": False,
@@ -864,6 +925,7 @@ class Executor:
             if last_gate_results
             else "",
             "failure_classification": last_failure_classification,
+            "secondary_warnings": list(secondary_warnings),
             "policy": {
                 "run_validation_gate": run_milestone_validation,
                 "test_command": apply_policy.test_command,
