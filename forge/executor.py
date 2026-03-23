@@ -30,8 +30,10 @@ from forge.planner_resolver import resolve_planner
 from forge.policy_config import (
     ReviewedApplyPolicy,
     TaskExecutionPolicy,
+    load_planner_policy,
     load_reviewed_apply_policy,
     load_task_execution_policy,
+    merge_planner_policy,
 )
 from forge.failure_classification import (
     FailureClassification,
@@ -47,7 +49,13 @@ from forge.run_events import (
     PHASE_COMPLETED,
     PHASE_STARTED,
     PLAN_SAVED,
+    TASK_PLAN_SYNTHESIZED,
     as_emitter,
+)
+from forge.task_plan_synthesis import (
+    TaskEmbeddedActionsError,
+    synthesize_execution_plan_from_task,
+    task_has_nonempty_embedded_forge_actions,
 )
 from forge.planner import DeterministicPlanner, Planner
 from forge.reviewed_plan import (
@@ -149,6 +157,10 @@ def _persist_repair_loop_attempt_artifact(
 
 def _planner_warnings(planner_meta: dict, plan: ExecutionPlan) -> list[str]:
     warnings: list[str] = []
+    if planner_meta.get("plan_source") == "task_forge_actions":
+        warnings.append(
+            "Plan synthesized from task JSON forge_actions (LLM planner not used for planning)."
+        )
     if planner_meta.get("is_nondeterministic"):
         client = planner_meta.get("llm_client") or "unknown"
         model = planner_meta.get("llm_model")
@@ -1012,6 +1024,7 @@ class Executor:
         *,
         task_id: int | None = None,
         repair_context: dict | None = None,
+        planner_mode_override: str | None = None,
     ) -> dict:
         """
         Build and simulate an execution plan for a **task** under the milestone.
@@ -1058,52 +1071,91 @@ class Executor:
             }
         milestone = task_to_execution_milestone(parent, task)
 
-        planner = planner or DeterministicPlanner()
-        try:
-            plan = planner.build_plan(
-                milestone, repair_context=repair_context
-            )
-            _ = ExecutionPlanBuilder.parse_validation_rules(milestone)
-        except ValueError as exc:
-            msg = str(exc)
-            out: dict[str, Any] = {
-                "ok": False,
-                "message": msg,
-                "milestone_id": milestone_id,
-            }
-            if "LLM planner action" in msg and "invalid:" in msg:
-                out["failure_type"] = "planner_format_error"
-                parser_reason = msg
-                bad_action = None
-                m_bad = re.search(r"Bad action:\s*('(?:[^'\\]|\\.)*')", msg)
-                if m_bad:
-                    bad_action = m_bad.group(1)
-                    parser_reason = msg[: m_bad.start()].strip()
-                m_path = re.search(r"Raw planner output saved to:\s*(.+)$", msg)
-                if bad_action is not None:
-                    out["bad_action"] = bad_action
-                out["parser_reason"] = parser_reason
-                if m_path:
-                    out["raw_planner_output_path"] = m_path.group(1).strip()
-            return out
+        plan: ExecutionPlan | None = None
+        planner_meta: dict[str, Any] | None = None
 
+        skip_embedded = bool(repair_context)
+        if (
+            not skip_embedded
+            and task_has_nonempty_embedded_forge_actions(task)
+        ):
+            try:
+                plan, meta_obj = synthesize_execution_plan_from_task(task, milestone)
+                planner_meta = dict(meta_obj)
+            except TaskEmbeddedActionsError as exc:
+                return {
+                    "ok": False,
+                    "message": str(exc),
+                    "milestone_id": milestone_id,
+                    "task_id": task_id,
+                    "failure_type": "task_action_validation_error",
+                    "offending_action": exc.offending_action,
+                    "parser_reason": exc.parser_message,
+                }
+        else:
+            use_planner = planner or DeterministicPlanner()
+            try:
+                plan = use_planner.build_plan(milestone, repair_context=repair_context)
+                _ = ExecutionPlanBuilder.parse_validation_rules(milestone)
+                planner_meta = dict(use_planner.metadata())
+            except ValueError as exc:
+                msg = str(exc)
+                out_err: dict[str, Any] = {
+                    "ok": False,
+                    "message": msg,
+                    "milestone_id": milestone_id,
+                }
+                if "LLM planner action" in msg and "invalid:" in msg:
+                    out_err["failure_type"] = "planner_format_error"
+                    parser_reason = msg
+                    bad_action = None
+                    m_bad = re.search(r"Bad action:\s*('(?:[^'\\]|\\.)*')", msg)
+                    if m_bad:
+                        bad_action = m_bad.group(1)
+                        parser_reason = msg[: m_bad.start()].strip()
+                    m_path = re.search(r"Raw planner output saved to:\s*(.+)$", msg)
+                    if bad_action is not None:
+                        out_err["bad_action"] = bad_action
+                    out_err["parser_reason"] = parser_reason
+                    if m_path:
+                        out_err["raw_planner_output_path"] = m_path.group(1).strip()
+                return out_err
+
+        assert plan is not None and planner_meta is not None
         plan.task_id = task_id
 
-        planner_meta = planner.metadata()
+        pol_b, pol_err = load_planner_policy()
+        if pol_err:
+            policy_mode = "deterministic"
+            planner_meta["policy_llm_client"] = None
+        else:
+            pol_m = merge_planner_policy(pol_b, mode_override=planner_mode_override)
+            policy_mode = pol_m.mode
+            planner_meta["policy_llm_client"] = pol_m.llm_client
+        planner_meta["policy_planner_mode"] = policy_mode
+        if (
+            not skip_embedded
+            and task_has_nonempty_embedded_forge_actions(task)
+        ):
+            planner_meta["mode"] = policy_mode
+        elif not planner_meta.get("mode"):
+            planner_meta["mode"] = policy_mode
+
         warnings = _planner_warnings(planner_meta, plan)
         applier = ArtifactActionApplier(Paths)
-        preview = applier.apply(plan, milestone, dry_run=True)
+        dry = applier.apply(plan, milestone, dry_run=True)
+        effective_mode = str(planner_meta.get("mode") or policy_mode)
         out: dict = {
-            "ok": len(preview.errors) == 0,
+            "ok": len(dry.errors) == 0,
             "milestone_id": milestone.id,
             "title": milestone.title,
-            "planner_mode": planner.mode,
+            "planner_mode": effective_mode,
             "planner_metadata": planner_meta,
             "execution_plan": plan.to_serializable(),
-            "files_changed": preview.normalized_files_changed(),
-            "artifact_summary": preview.human_summary(),
-            "actions_applied": preview.actions_applied,
-            "errors": preview.errors,
+            "files_changed": dry.normalized_files_changed(),
+            "artifact_summary": dry.human_summary(),
+            "actions_applied": dry.actions_applied,
+            "errors": dry.errors,
             "warnings": warnings,
         }
         out["task_id"] = task_id
@@ -1118,6 +1170,7 @@ class Executor:
         event_bus: object | None = None,
         *,
         repair_context: dict | None = None,
+        planner_mode_override: str | None = None,
     ) -> dict:
         """Preview/save a reviewed plan built from a task under ``milestone_id``."""
         ens = ensure_tasks_for_milestone(milestone_id)
@@ -1132,6 +1185,7 @@ class Executor:
             planner=planner,
             task_id=task_id,
             repair_context=repair_context,
+            planner_mode_override=planner_mode_override,
         )
         if not preview.get("ok"):
             return preview
@@ -1140,11 +1194,12 @@ class Executor:
             if not parent:
                 return {"ok": False, "message": "Invalid milestone ID."}
             plan = ExecutionPlan.from_serializable(preview["execution_plan"])
+            eff_mode = preview.get("planner_mode", planner.mode)
             payload = save_reviewed_plan(
                 milestone_id,
                 parent.title,
                 plan,
-                planner_mode=planner.mode,
+                planner_mode=eff_mode,
                 planner_metadata=preview.get("planner_metadata", planner.metadata()),
                 warnings=preview.get("warnings", []),
                 review_enforcement=review_enforcement,
@@ -1159,6 +1214,17 @@ class Executor:
             planner_meta = payload.get("planner_metadata", {}) or {}
             norm_events = planner_meta.get("normalization_events") or []
             bus = as_emitter(event_bus)
+            if planner_meta.get("plan_source") == "task_forge_actions":
+                acts = (preview.get("execution_plan") or {}).get("actions") or []
+                bus.emit(
+                    TASK_PLAN_SYNTHESIZED,
+                    milestone_id=milestone_id,
+                    task_id=task_id,
+                    action_count=len(acts),
+                    reason=str(
+                        planner_meta.get("reason") or "embedded_forge_actions_present"
+                    ),
+                )
             for ne in norm_events:
                 if not isinstance(ne, dict):
                     continue

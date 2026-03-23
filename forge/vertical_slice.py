@@ -23,9 +23,11 @@ from forge.policy_config import (
     load_planner_policy,
     load_reviewed_apply_policy,
     load_task_execution_policy,
+    merge_planner_policy,
     merge_reviewed_apply_policy,
 )
-from forge.planner import Planner
+from forge.planner import DeterministicPlanner, Planner
+from forge.task_plan_synthesis import task_has_nonempty_embedded_forge_actions
 from forge.run_events import (
     ARTIFACT_WRITTEN,
     PHASE_COMPLETED,
@@ -613,13 +615,17 @@ def _review_enforcement_status(
     planner: Planner, policy: PlannerPolicy, *, save_plan: bool
 ) -> dict:
     enabled = bool(getattr(policy, "require_review_for_nondeterministic", False))
-    required = bool(planner.metadata().get("is_nondeterministic"))
-    compliant = (not enabled) or (not required) or bool(save_plan)
+    # Policy ``llm`` still requires reviewed-plan workflow even when the concrete
+    # plan was synthesized deterministically from task JSON (no LLM plan call).
+    planner_is_nondeterministic = bool(
+        planner.metadata().get("is_nondeterministic")
+    ) or (policy.mode == "llm")
+    compliant = (not enabled) or (not planner_is_nondeterministic) or bool(save_plan)
     return {
         "enabled": enabled,
-        "required_for_plan": required and enabled,
+        "required_for_plan": planner_is_nondeterministic and enabled,
         "compliant": compliant,
-        "requires_save_plan": bool(enabled and required),
+        "requires_save_plan": bool(enabled and planner_is_nondeterministic),
     }
 
 
@@ -1032,23 +1038,16 @@ def run_vertical_slice(
         bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
-    planner, eff_planner_policy, planner_err = resolve_planner(mode_override=planner_mode)
-    if planner_err or planner is None or eff_planner_policy is None:
-        msg = planner_err or "Planner unavailable."
-        stages.append(
-            {
-                "stage": "preview_save_plan",
-                "ok": False,
-                "message": msg,
-            }
-        )
+    policy_base, policy_err = load_planner_policy()
+    if policy_err:
+        msg = policy_err
+        stages.append({"stage": "preview_save_plan", "ok": False, "message": msg})
         bus.emit(RUN_FAILED, reason=msg, phase="plan")
         bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
 
-    enforcement = _review_enforcement_status(
-        planner, eff_planner_policy, save_plan=True
-    )
+    eff_planner_policy = merge_planner_policy(policy_base, mode_override=planner_mode)
+
     bus.emit(
         PHASE_STARTED,
         phase="plan",
@@ -1067,10 +1066,36 @@ def run_vertical_slice(
         bus.emit(RUN_FAILED, reason=msg, phase="plan")
         bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
+
+    if task_has_nonempty_embedded_forge_actions(nt):
+        plan_planner = DeterministicPlanner()
+    else:
+        plan_planner, _, plan_resolve_err = resolve_planner(mode_override=planner_mode)
+        if plan_resolve_err or plan_planner is None:
+            msg = plan_resolve_err or "Planner unavailable."
+            stages.append(
+                {
+                    "stage": "preview_save_plan",
+                    "ok": False,
+                    "message": msg,
+                }
+            )
+            bus.emit(RUN_FAILED, reason=msg, phase="plan")
+            bus.emit(RUN_COMPLETED, ok=False)
+            return _finalize(stages, ok=False)
+
+    apply_planner, _, apply_resolve_err = resolve_planner(mode_override=planner_mode)
+    if apply_resolve_err or apply_planner is None:
+        apply_planner = plan_planner
+
+    enforcement = _review_enforcement_status(
+        apply_planner, eff_planner_policy, save_plan=True
+    )
     preview = Executor.save_reviewed_plan_for_task(
         milestone_id,
         nt.id,
-        planner=planner,
+        planner=plan_planner,
+        planner_mode_override=planner_mode,
         review_enforcement=enforcement,
         event_bus=bus,
     )
@@ -1156,7 +1181,7 @@ def run_vertical_slice(
         vm_id,
         vt_id,
         vm_milestone,
-        planner=planner,
+        planner=apply_planner,
         apply_policy=resolved,
         task_exec_policy=task_exec_policy,
         run_milestone_validation=resolved.run_validation_gate,

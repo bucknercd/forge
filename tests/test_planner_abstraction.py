@@ -8,6 +8,7 @@ from forge.executor import Executor
 from forge.llm import LLMClient
 from forge.paths import Paths
 from forge.planner import DeterministicPlanner, LLMPlanner
+from forge.task_service import Task, ensure_tasks_for_milestone, list_tasks, save_tasks
 from tests.forge_test_project import compat_forge_block, configure_project, forge_block
 
 
@@ -207,6 +208,29 @@ def test_llm_preview_warns_for_suspicious_duplicate_heavy_plan(tmp_path):
 - **Validation**: V
 {compat_forge_block("DUPBASE")}
 """,
+    )
+    ensure_tasks_for_milestone(1)
+    tasks = list_tasks(1)
+    assert len(tasks) == 1
+    t0 = tasks[0]
+    save_tasks(
+        1,
+        [
+            Task(
+                id=t0.id,
+                milestone_id=t0.milestone_id,
+                title=t0.title,
+                objective=t0.objective,
+                summary=t0.summary,
+                depends_on=list(t0.depends_on),
+                files_allowed=t0.files_allowed,
+                validation=t0.validation,
+                done_when=t0.done_when,
+                status=t0.status,
+                forge_actions=[],
+                forge_validation=list(t0.forge_validation),
+            )
+        ],
     )
     milestone = MilestoneService.get_milestone(1)
     assert milestone is not None

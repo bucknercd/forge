@@ -29,13 +29,16 @@ from forge.cli_output import (
 )
 from forge.policy_config import (
     ReviewedApplyPolicy,
+    load_planner_policy,
     load_reviewed_apply_policy,
     load_task_execution_policy,
+    merge_planner_policy,
     merge_reviewed_apply_policy,
 )
+from forge.planner import DeterministicPlanner
 from forge.planner_resolver import resolve_planner
 from forge.llm_resolve import resolve_llm_client_from_policy
-from forge.policy_config import load_planner_policy
+from forge.task_plan_synthesis import task_has_nonempty_embedded_forge_actions
 from forge.milestone_synthesis import (
     accept_synthesized_milestones,
     load_synthesized_milestones,
@@ -58,6 +61,17 @@ from forge.task_service import (
 )
 
 
+def _cli_preview_planner_metadata(planner, planner_policy) -> dict:
+    """Merge policy LLM fields when the concrete planner is a placeholder (embedded synthesis path)."""
+    meta = dict(planner.metadata())
+    if getattr(planner_policy, "mode", None) == "llm":
+        if meta.get("llm_client") in (None, "unknown") and planner_policy.llm_client:
+            meta["llm_client"] = planner_policy.llm_client
+        if meta.get("llm_model") is None and getattr(planner_policy, "llm_model", None):
+            meta["llm_model"] = planner_policy.llm_model
+    return meta
+
+
 def _task_list_for_milestone_cli(milestone_id: int) -> list[dict]:
     return [
         {
@@ -78,13 +92,15 @@ from forge.vertical_slice import (
 
 def _review_enforcement_status(planner, policy, *, save_plan: bool) -> dict:
     enabled = bool(getattr(policy, "require_review_for_nondeterministic", False))
-    required = bool(planner and planner.metadata().get("is_nondeterministic"))
-    compliant = (not enabled) or (not required) or bool(save_plan)
+    planner_is_nondeterministic = bool(
+        planner and planner.metadata().get("is_nondeterministic")
+    ) or (getattr(policy, "mode", "") == "llm")
+    compliant = (not enabled) or (not planner_is_nondeterministic) or bool(save_plan)
     return {
         "enabled": enabled,
-        "required_for_plan": required and enabled,
+        "required_for_plan": planner_is_nondeterministic and enabled,
         "compliant": compliant,
-        "requires_save_plan": bool(enabled and required),
+        "requires_save_plan": bool(enabled and planner_is_nondeterministic),
     }
 
 
@@ -694,21 +710,54 @@ class ForgeCLI:
         task_id: int | None = None,
     ):
         """Dry-run preview of milestone (or task) execution (no writes)."""
-        planner, planner_policy, planner_err = resolve_planner(mode_override=planner_mode)
-        if planner_err:
+        policy_base, policy_err = load_planner_policy()
+        if policy_err:
             if json_mode:
                 print(
                     json.dumps(
                         serialize_preview_result(
-                            {"ok": False, "message": planner_err, "errors": [planner_err]}
+                            {"ok": False, "message": policy_err, "errors": [policy_err]}
                         ),
                         indent=2,
                         sort_keys=True,
                     )
                 )
             else:
-                print(planner_err)
+                print(policy_err)
             return
+        planner_policy = merge_planner_policy(policy_base, mode_override=planner_mode)
+
+        use_embedded_planner = False
+        if milestone_id is not None and task_id is not None:
+            ens0 = ensure_tasks_for_milestone(milestone_id)
+            if ens0.get("ok"):
+                tk0 = get_task(milestone_id, task_id)
+                if tk0 is not None and task_has_nonempty_embedded_forge_actions(tk0):
+                    use_embedded_planner = True
+
+        if use_embedded_planner:
+            planner = DeterministicPlanner()
+            planner_err = None
+        else:
+            planner, _, planner_err = resolve_planner(mode_override=planner_mode)
+            if planner_err:
+                if json_mode:
+                    print(
+                        json.dumps(
+                            serialize_preview_result(
+                                {
+                                    "ok": False,
+                                    "message": planner_err,
+                                    "errors": [planner_err],
+                                }
+                            ),
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                else:
+                    print(planner_err)
+                return
         assert planner is not None
         enforcement = _review_enforcement_status(planner, planner_policy, save_plan=save_plan)
         if enforcement["requires_save_plan"] and not save_plan:
@@ -720,8 +769,8 @@ class ForgeCLI:
                 "ok": False,
                 "message": msg,
                 "errors": [msg],
-                "planner_mode": planner.mode,
-                "planner_metadata": planner.metadata(),
+                "planner_mode": planner_policy.mode,
+                "planner_metadata": _cli_preview_planner_metadata(planner, planner_policy),
                 "review_enforcement": enforcement,
             }
             if json_mode:
@@ -760,6 +809,7 @@ class ForgeCLI:
                         int(result["task_id"]),
                         planner=planner,
                         review_enforcement=enforcement,
+                        planner_mode_override=planner_mode,
                     )
         elif save_plan:
             assert milestone_id is not None
@@ -769,6 +819,7 @@ class ForgeCLI:
                     task_id,
                     planner=planner,
                     review_enforcement=enforcement,
+                    planner_mode_override=planner_mode,
                 )
             else:
                 result = {
@@ -800,7 +851,10 @@ class ForgeCLI:
                     result = {"ok": False, "message": ens.get("message", "")}
                 else:
                     result = Executor.preview_milestone(
-                        milestone_id, planner=planner, task_id=task_id
+                        milestone_id,
+                        planner=planner,
+                        task_id=task_id,
+                        planner_mode_override=planner_mode,
                     )
             else:
                 ens = ensure_tasks_for_milestone(milestone_id)
@@ -858,6 +912,8 @@ class ForgeCLI:
             if pmeta.get("llm_model"):
                 planner_line += f":{pmeta.get('llm_model')}"
             planner_line += ")"
+        elif pmeta.get("policy_llm_client"):
+            planner_line += f" ({pmeta.get('policy_llm_client')})"
         print(planner_line)
         if result.get("plan_id"):
             print(f"Reviewed Plan ID: {result['plan_id']}")
@@ -1083,6 +1139,8 @@ class ForgeCLI:
             if pmeta.get("llm_model"):
                 planner_line += f":{pmeta.get('llm_model')}"
             planner_line += ")"
+        elif pmeta.get("policy_llm_client"):
+            planner_line += f" ({pmeta.get('policy_llm_client')})"
         print(planner_line)
         for w in result.get("warnings", []):
             print(f"Warning: {w}")
@@ -1259,14 +1317,14 @@ class ForgeCLI:
                 )
 
         if milestone_id is not None:
-            planner, planner_policy, planner_err = resolve_planner(mode_override=planner_mode)
-            if planner_err:
-                stages.append({"stage": "preview_save_plan", "ok": False, "message": planner_err})
+            policy_base, policy_err = load_planner_policy()
+            if policy_err:
+                stages.append({"stage": "preview_save_plan", "ok": False, "message": policy_err})
                 return ForgeCLI._print_workflow_result(
                     stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
                 )
-            assert planner is not None
-            enforcement = _review_enforcement_status(planner, planner_policy, save_plan=True)
+            planner_policy = merge_planner_policy(policy_base, mode_override=planner_mode)
+
             expand = ensure_tasks_for_milestone(milestone_id)
             if not expand.get("ok"):
                 stages.append(
@@ -1287,10 +1345,27 @@ class ForgeCLI:
                 return ForgeCLI._print_workflow_result(
                     stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
                 )
+
+            if task_has_nonempty_embedded_forge_actions(nt):
+                plan_planner = DeterministicPlanner()
+            else:
+                plan_planner, _, plan_err = resolve_planner(mode_override=planner_mode)
+                if plan_err:
+                    stages.append({"stage": "preview_save_plan", "ok": False, "message": plan_err})
+                    return ForgeCLI._print_workflow_result(
+                        stages, json_mode=json_mode, synthesis_id=chosen_synthesis_id, plan_id=latest_plan_id
+                    )
+            apply_planner, _, apply_err = resolve_planner(mode_override=planner_mode)
+            if apply_err or apply_planner is None:
+                apply_planner = plan_planner
+
+            enforcement = _review_enforcement_status(apply_planner, planner_policy, save_plan=True)
+
             preview = Executor.save_reviewed_plan_for_task(
                 milestone_id,
                 nt.id,
-                planner=planner,
+                planner=plan_planner,
+                planner_mode_override=planner_mode,
                 review_enforcement=enforcement,
             )
             stages.append({"stage": "preview_save_plan", **preview})
@@ -1371,7 +1446,7 @@ class ForgeCLI:
                     am_id,
                     at_id,
                     am_milestone,
-                    planner=planner,
+                    planner=apply_planner,
                     apply_policy=resolved_policy,
                     task_exec_policy=task_exec_policy,
                     run_milestone_validation=resolved_policy.run_validation_gate,
