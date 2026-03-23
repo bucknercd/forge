@@ -57,6 +57,7 @@ from forge.task_plan_synthesis import (
     synthesize_execution_plan_from_task,
     task_has_nonempty_embedded_forge_actions,
 )
+from forge.task_ir import compile_task_to_ir, plan_is_substantive_for_task
 from forge.planner import DeterministicPlanner, Planner
 from forge.reviewed_plan import (
     load_reviewed_plan,
@@ -1131,16 +1132,14 @@ class Executor:
                 ),
                 "milestone_id": milestone_id,
             }
+        task_ir = compile_task_to_ir(task)
         milestone = task_to_execution_milestone(parent, task)
 
         plan: ExecutionPlan | None = None
         planner_meta: dict[str, Any] | None = None
 
         skip_embedded = bool(repair_context)
-        if (
-            not skip_embedded
-            and task_has_nonempty_embedded_forge_actions(task)
-        ):
+        if not skip_embedded and task_ir.has_embedded_actions:
             try:
                 plan, meta_obj = synthesize_execution_plan_from_task(task, milestone)
                 planner_meta = dict(meta_obj)
@@ -1195,15 +1194,21 @@ class Executor:
             policy_mode = pol_m.mode
             planner_meta["policy_llm_client"] = pol_m.llm_client
         planner_meta["policy_planner_mode"] = policy_mode
-        if (
-            not skip_embedded
-            and task_has_nonempty_embedded_forge_actions(task)
-        ):
+        if not skip_embedded and task_ir.has_embedded_actions:
             planner_meta["mode"] = policy_mode
         elif not planner_meta.get("mode"):
             planner_meta["mode"] = policy_mode
+        planner_meta["task_ir"] = {
+            "task_type": task_ir.task_type,
+            "behavior_signals": list(task_ir.behavior_signals),
+            "has_embedded_actions": task_ir.has_embedded_actions,
+        }
 
         warnings = _planner_warnings(planner_meta, plan)
+        if not plan_is_substantive_for_task(task_ir, plan):
+            warnings.append(
+                f"Plan is non-substantive for task type '{task_ir.task_type}'."
+            )
         applier = ArtifactActionApplier(Paths)
         dry = applier.apply(plan, milestone, dry_run=True)
         effective_mode = str(planner_meta.get("mode") or policy_mode)
@@ -1221,6 +1226,7 @@ class Executor:
             "warnings": warnings,
         }
         out["task_id"] = task_id
+        out["task_ir"] = task_ir.to_dict()
         return out
 
     @staticmethod
