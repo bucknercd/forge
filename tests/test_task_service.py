@@ -22,6 +22,103 @@ from forge.task_service import (
 from tests.forge_test_project import configure_project, forge_block
 
 
+def test_llm_task_expansion_strips_pseudo_actions_and_invokes_planner(tmp_path, monkeypatch):
+    """Regression: LLM task expansion must not persist pseudo-embedded actions.
+
+    Specifically, task expansion must not write invalid pseudo-actions such as
+    create_file/modify_file into `.system/tasks/*.json` (planner parsing must
+    never see them).
+    """
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Spec only
+- **Objective**: Implement logcheck behavior (count/filter ERROR lines).
+- **Scope**: src/ and tests/
+- **Validation**: behavioral correctness checks
+""",
+    )
+    (tmp_path / "forge-policy.json").write_text(
+        json.dumps({"planner": {"mode": "llm", "llm_client": "openai"}}, indent=2),
+        encoding="utf-8",
+    )
+
+    class _BadTaskExpansionLLM:
+        def generate(self, prompt: str) -> str:  # noqa: ARG002
+            payload = {
+                "tasks": [
+                    {
+                        "id": 1,
+                        "title": "Behavior slice one for logcheck tool",
+                        "objective": "Filter and count repeated ERROR lines.",
+                        "summary": "Slice one of two behavior work items.",
+                        "depends_on": [],
+                        "validation": "file_contains requirements Overview",
+                        "done_when": "Slice one validation passes.",
+                        "forge_actions": ["create_file examples/sample.log", "mark_milestone_completed"],
+                        "forge_validation": ["file_contains requirements Overview"],
+                    },
+                    {
+                        "id": 2,
+                        "title": "Behavior slice two for logcheck tool",
+                        "objective": "Output top-k frequent ERROR lines.",
+                        "summary": "Slice two of two behavior work items.",
+                        "depends_on": [1],
+                        "validation": "file_contains requirements Overview",
+                        "done_when": "Slice two validation passes.",
+                        "forge_actions": ["modify_file examples/sample.log", "mark_milestone_completed"],
+                        "forge_validation": ["file_contains requirements Overview"],
+                    },
+                ]
+            }
+            return json.dumps(payload)
+
+        @property
+        def client_id(self) -> str:  # noqa: D401
+            return "bad_task_expander"
+
+    # Ensure task_service uses our bad task expander for LLM expansion.
+    monkeypatch.setattr(
+        "forge.task_service.resolve_llm_client_from_policy",
+        lambda _policy: (_BadTaskExpansionLLM(), None),
+    )
+
+    r = expand_milestone_to_tasks(milestone_id=1, force=True)
+    assert r["ok"] is True
+
+    tasks = list_tasks(1)
+    assert tasks, "expected task file to be written"
+    # LLM-expanded tasks must be spec-only: no embedded forge_actions.
+    assert all(t.forge_actions == [] for t in tasks)
+
+    raw_tasks_json = tasks_file_for_milestone(1).read_text(encoding="utf-8")
+    assert "create_file" not in raw_tasks_json
+    assert "modify_file" not in raw_tasks_json
+
+    # Since tasks have no embedded actions, the planner must be invoked for preview.
+    from forge.planner import LLMPlanner
+    from tests.test_planner_abstraction import CapturingLLM
+
+    capture = CapturingLLM(
+        json.dumps(
+            {
+                "actions": [
+                    "write_file src/logcheck.py | def main():\\n    return 'ok'\\n",
+                    "mark_milestone_completed",
+                ]
+            }
+        )
+    )
+    planner = LLMPlanner(capture, fallback_to_milestone_actions=False)
+    preview = Executor.preview_milestone(1, planner=planner, task_id=tasks[0].id)
+    assert preview["ok"] is True
+    assert capture.last_prompt != ""
+
+
 def test_expand_creates_multiple_tasks_from_typical_milestone(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)

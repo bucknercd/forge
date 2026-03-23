@@ -22,6 +22,7 @@ from forge.llm import LLMClient, StubLLMClient
 from forge.llm_resolve import resolve_llm_client_from_policy
 from forge.paths import Paths
 from forge.policy_config import load_planner_policy
+from forge.execution.parse import parse_forge_action_line
 
 MIN_MULTI_TASKS = 2
 MAX_TASKS = 6
@@ -645,6 +646,71 @@ def _compat_single_task(parent: Milestone, milestone_id: int) -> list[Task]:
     ]
 
 
+_PSEUDO_ACTION_VERBS = {
+    "create_file",
+    "modify_file",
+    "update_file",
+    "edit_file",
+}
+
+
+def _sanitize_task_forge_actions(parent: Milestone, tasks: list[Task]) -> dict[str, Any]:
+    """
+    Strip pseudo/invalid embedded forge actions so tasks remain spec-like.
+
+    We validate embedded actions by round-tripping them through the existing
+    deterministic Forge parser (parse_forge_action_line). Invalid lines are
+    removed before tasks are persisted.
+    """
+
+    invalid_dropped: list[dict[str, str]] = []
+    for t in tasks:
+        if not t.forge_actions:
+            continue
+        kept: list[str] = []
+        for raw in t.forge_actions:
+            a = (raw or "").strip()
+            if not a:
+                continue
+            verb = a.split(None, 1)[0].lower()
+            if verb in _PSEUDO_ACTION_VERBS:
+                invalid_dropped.append({"task_id": str(t.id), "action": a, "reason": "pseudo_action"})
+                continue
+            try:
+                # Validate canonical syntax deterministically. We discard the parsed
+                # object; we only care that parsing succeeds.
+                parse_forge_action_line(a, parent, line_no=None)
+            except ValueError as exc:
+                invalid_dropped.append(
+                    {
+                        "task_id": str(t.id),
+                        "action": a,
+                        "reason": f"invalid_forge_action: {exc}",
+                    }
+                )
+                continue
+            kept.append(a)
+        t.forge_actions = kept
+
+    return {"invalid_actions_dropped": invalid_dropped, "task_count": len(tasks)}
+
+
+def _clear_forge_actions_for_llm_tasks(mode: str, tasks: list[Task]) -> int:
+    """
+    For LLM-generated vertical slices we keep tasks spec-driven.
+    Execution must be handled by the planner, not embedded in tasks.
+    """
+
+    if mode != "llm_multi":
+        return 0
+    cleared = 0
+    for t in tasks:
+        if t.forge_actions:
+            cleared += len(t.forge_actions)
+        t.forge_actions = []
+    return cleared
+
+
 def expand_milestone_to_tasks(*, milestone_id: int, force: bool = False) -> dict[str, Any]:
     """
     Ensure milestone ``milestone_id`` has a task breakdown.
@@ -703,6 +769,11 @@ def expand_milestone_to_tasks(*, milestone_id: int, force: bool = False) -> dict
         if not ok_c:
             return {"ok": False, "message": f"Compatibility task invalid: {err_c}"}
 
+    # Safety: tasks must never persist unsupported pseudo-actions.
+    # Also make LLM-expanded tasks spec-only by default.
+    sanitize_res = _sanitize_task_forge_actions(parent, chosen)
+    llm_cleared = _clear_forge_actions_for_llm_tasks(mode, chosen)
+
     save_tasks(milestone_id, chosen)
     try:
         rel = path.relative_to(Paths.BASE_DIR).as_posix()
@@ -723,4 +794,6 @@ def expand_milestone_to_tasks(*, milestone_id: int, force: bool = False) -> dict
         "skipped": False,
         "tasks_path": str(path),
         "expansion_mode": mode,
+        "invalid_actions_dropped": len(sanitize_res.get("invalid_actions_dropped") or []),
+        "llm_actions_cleared": llm_cleared,
     }
