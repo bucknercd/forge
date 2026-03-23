@@ -1,5 +1,201 @@
 # Forge
 
+Forge is a spec-driven CLI for turning product intent into reviewed plans, code changes, and validation gates with explicit control.
+
+## Why Forge Exists
+
+Modern LLM coding flows have a reliability gap:
+
+- generated projects can look correct and still miss core logic
+- tests can pass while behavior is still shallow
+- autonomous edits can drift away from requirements
+
+Forge exists to make this visible and enforceable. It is not "let the LLM go wild." It is a control and correctness layer around planning and apply.
+
+## What Forge Does
+
+Forge turns an idea or vision into executable engineering workflow:
+
+- `vision` -> `requirements` -> `architecture` -> `milestones`
+- task expansion from milestones
+- reviewed plan generation per task
+- deterministic apply
+- post-apply validation and test gates
+
+Core artifacts are plain files in your repo:
+
+- `docs/vision.txt`
+- `docs/requirements.md`
+- `docs/architecture.md`
+- `docs/milestones.md`
+- `.system/tasks/m<id>.json`
+- `.system/reviewed_plans/`
+
+## Core Principles / Design Goals
+
+- **Spec-first**: `docs/` stays the source of truth.
+- **Task-scoped execution**: milestones are roadmap; tasks are executable units.
+- **Reviewed plans**: apply happens from saved plans, not hidden model state.
+- **Validation gates**: require explicit checks after apply.
+- **Deterministic execution path**: given a reviewed plan, behavior is reproducible.
+- **Anti-shallow safeguards**: classify and fail structural stubs that miss required behavior.
+
+## Current Status
+
+Forge is promising and actively evolving, but not fully end-to-end reliable for all project shapes yet.
+
+- core loop works for many scenarios
+- robustness and planner hardening are in progress
+- some flows still need iterative fixes and tighter guardrails
+
+This repository should be read as an in-progress systems project focused on correctness, control, and reproducibility.
+
+## Simple Pipeline Overview
+
+```text
+idea / vision
+  -> docs (vision, requirements, architecture, milestones)
+  -> tasks (.system/tasks/m<id>.json)
+  -> reviewed plan (m<id>-t<task>-<hash>)
+  -> apply actions
+  -> validation + optional test command
+  -> repair loop when classification says "not done"
+```
+
+## Quick Start
+
+### 1) Install
+
+```bash
+git clone git@github.com:bucknercd/forge.git
+cd forge
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+### 2) Run demo vertical slice (no API key required)
+
+```bash
+mkdir forge-demo && cd forge-demo
+forge init
+forge vertical-slice --demo
+```
+
+### 3) Inspect and continue
+
+```bash
+forge status
+forge task-preview 1 --task 1 --save-plan
+forge task-apply-plan <plan_id>
+forge run-next
+```
+
+## Using an LLM
+
+Forge supports OpenAI-backed planning/docs generation via policy.
+
+Create `forge-policy.json` in project root:
+
+```json
+{
+  "planner": {
+    "mode": "llm",
+    "llm_client": "openai",
+    "llm_model": "gpt-4o"
+  }
+}
+```
+
+Set credentials in environment:
+
+```bash
+export FORGE_OPENAI_API_KEY="sk-..."
+# or export OPENAI_API_KEY="sk-..."
+```
+
+Run with your own intent:
+
+```bash
+forge vertical-slice --idea "Small FastAPI service with a /health endpoint"
+```
+
+Vision-file flow (recommended for longer input):
+
+```bash
+forge vertical-slice --from-vision
+# or
+forge vertical-slice --vision-file ./docs/vision.txt
+```
+
+## Important Concepts
+
+- **Milestones vs tasks**: milestones define roadmap intent; tasks are what planner/apply execute.
+- **Reviewed plans**: task-scoped plans are saved under `.system/reviewed_plans/`.
+- **Apply step**: runs canonical Forge actions (`write_file`, bounded edits, section edits, etc.).
+- **Validation gates**: Forge Validation rules plus optional repo test command.
+- **Vertical slice flow**: materialize docs, ensure tasks, save reviewed plan, apply, run gates.
+
+## Why This Project Is Interesting
+
+Forge is built with the same spec-driven / AI-assisted methodology it promotes.
+
+That makes this repo both:
+
+- a practical CLI for controlled LLM-assisted execution
+- a testbed for spec-driven development itself
+
+If you care about DevTools, platform engineering, AI infra safety, or reproducible automation, Forge is a concrete systems problem: how to keep model-assisted development useful without giving up control.
+
+## Common Commands
+
+End-to-end:
+
+```bash
+forge vertical-slice --demo
+forge vertical-slice --idea "Your short idea"
+forge vertical-slice --from-vision
+forge vertical-slice --vision-file ./notes/vision.txt
+```
+
+Task-first workflow:
+
+```bash
+forge task-expand --milestone 1
+forge task-list --milestone 1
+forge task-show --milestone 1 --task 1
+forge task-preview 1 --task 1
+forge task-preview 1 --task 1 --save-plan
+forge task-apply-plan m1-t1-<hash12>
+forge run-next
+```
+
+Guarded workflow:
+
+```bash
+forge workflow-guarded --milestone-id 1 --synthesize --apply-plan --gate-test-cmd "pytest"
+```
+
+## Contributing / Feedback
+
+Issues and PRs are welcome, especially around:
+
+- planner robustness and canonical action generation
+- stronger validation against shallow implementations
+- reproducibility and repair-loop convergence
+- ergonomics for real team workflows
+
+If you found a failure mode, include:
+
+- command used
+- relevant run output
+- artifacts from `.forge/runs/` and `.system/results/` if available
+
+## License
+
+MIT
+# Forge
+
 Forge is a **spec-driven CLI** that turns **ideas into milestones into code**—**the coherent, validated code that working systems are built from**.
 
 Forge is a **two-layer system**:
