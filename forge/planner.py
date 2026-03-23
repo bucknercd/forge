@@ -53,12 +53,14 @@ class LLMPlanner(Planner):
     stable_for_recheck: bool = False
     fallback_to_milestone_actions: bool = True
     last_normalization_notes: list[str] = field(default_factory=list)
+    last_normalization_events: list[dict[str, str]] = field(default_factory=list)
     last_json_extraction_kind: str | None = None
 
     def build_plan(
         self, milestone: Milestone, *, repair_context: dict | None = None
     ) -> ExecutionPlan:
         self.last_normalization_notes = []
+        self.last_normalization_events = []
         self.last_json_extraction_kind = None
         prompt = _build_llm_plan_prompt(milestone)
         if repair_context:
@@ -96,9 +98,20 @@ class LLMPlanner(Planner):
                     normalized, notes = normalize_llm_planner_action_line(item)
                     for n in notes:
                         self.last_normalization_notes.append(f"action {idx}: {n}")
+                    if normalized != item:
+                        self.last_normalization_events.append(
+                            {
+                                "action_index": str(idx),
+                                "original_action": item,
+                                "normalized_action": normalized,
+                                "reason": (notes[0] if notes else "normalized at planner boundary"),
+                            }
+                        )
                     actions.append(parse_forge_action_line(normalized, milestone))
                 except ValueError as exc:
-                    raise ValueError(f"LLM planner action {idx} invalid: {exc}") from exc
+                    raise ValueError(
+                        f"LLM planner action {idx} invalid: {exc} Bad action: {item!r}"
+                    ) from exc
             return ExecutionPlan(milestone_id=milestone.id, actions=actions)
         except ValueError as exc:
             artifact_path = None
@@ -120,6 +133,8 @@ class LLMPlanner(Planner):
         }
         if self.last_normalization_notes:
             meta["normalization_notes"] = self.last_normalization_notes
+        if self.last_normalization_events:
+            meta["normalization_events"] = self.last_normalization_events
         if self.last_json_extraction_kind:
             meta["json_extraction_kind"] = self.last_json_extraction_kind
         return meta

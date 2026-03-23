@@ -12,9 +12,12 @@ from forge.execution.parse import parse_forge_action_line
 from forge.paths import Paths
 from forge.planner import LLMPlanner
 from forge.planner_normalize import (
+    normalize_append_section_action,
     normalize_llm_planner_action_line,
     persist_llm_planner_raw_on_failure,
 )
+from forge.run_event_handlers import EventListCollector
+from forge.run_events import RunEventBus
 from tests.forge_test_project import configure_project
 from tests.test_planner_abstraction import FakeLLM
 
@@ -54,6 +57,19 @@ def test_normalize_leaves_valid_append_section_unchanged():
     canonical, notes = normalize_llm_planner_action_line(raw)
     assert canonical == raw
     assert notes == []
+
+
+def test_normalize_heading_only_phrase_form():
+    raw = "append_section requirements | Additional Requirements"
+    canonical, notes = normalize_llm_planner_action_line(raw)
+    assert canonical == (
+        "append_section requirements Additional Requirements | ## Additional Requirements"
+    )
+    assert notes
+
+
+def test_normalize_append_section_helper_none_for_other_actions():
+    assert normalize_append_section_action("write_file x.py | print('x')") is None
 
 
 def test_normalize_ambiguous_append_section_rejected_not_guessed():
@@ -115,6 +131,9 @@ def test_llm_planner_metadata_includes_normalization_notes(tmp_path, monkeypatch
     meta = planner.metadata()
     assert meta.get("normalization_notes")
     assert "Inferred" in meta["normalization_notes"][0] or "Repaired" in meta["normalization_notes"][0]
+    ev = meta.get("normalization_events") or []
+    assert ev and ev[0]["original_action"] == bad
+    assert "normalized_action" in ev[0]
 
 
 def test_llm_planner_persists_raw_output_on_parse_failure(tmp_path, monkeypatch):
@@ -182,6 +201,65 @@ def test_llm_planner_sloppy_append_then_apply_roundtrip(tmp_path, monkeypatch):
     applied = Executor.apply_reviewed_plan(plan_id)
     assert applied["ok"]
     assert "RT_BODY" in Paths.REQUIREMENTS_FILE.read_text(encoding="utf-8")
+
+
+def test_save_reviewed_plan_emits_planner_action_normalized_event(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: E
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+""",
+    )
+    from forge.executor import Executor
+
+    sloppy = "append_section architecture | Module Interactions"
+    planner = LLMPlanner(
+        FakeLLM(json.dumps({"actions": [sloppy, "mark_milestone_completed"]}))
+    )
+    collector = EventListCollector()
+    bus = RunEventBus("testrun_normalize", [collector])
+    preview = Executor.save_reviewed_plan_for_task(1, 1, planner=planner, event_bus=bus)
+    assert preview["ok"]
+    norm_events = [e for e in collector.events if e["type"] == "planner_action_normalized"]
+    assert norm_events
+    data = norm_events[0]["data"]
+    assert data["original_action"] == sloppy
+    assert "append_section architecture Module Interactions | ## Module Interactions" in str(
+        data["normalized_action"]
+    )
+
+
+def test_preview_milestone_invalid_unrecoverable_planner_format_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: P
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+""",
+    )
+    from forge.executor import Executor
+
+    raw_json = json.dumps(
+        {"actions": ["append_section requirements | this is not recoverable prose sentence."]}
+    )
+    planner = LLMPlanner(FakeLLM(raw_json), fallback_to_milestone_actions=False)
+    out = Executor.preview_milestone(1, planner=planner, task_id=1)
+    assert out["ok"] is False
+    assert out.get("failure_type") == "planner_format_error"
+    assert "append_section requirements" in out.get("bad_action", "")
+    assert "parser_reason" in out
+    assert "raw_planner_output_path" in out
 
 
 def test_llm_planner_repair_deterministic_same_input_same_plan(tmp_path, monkeypatch):

@@ -1065,7 +1065,27 @@ class Executor:
             )
             _ = ExecutionPlanBuilder.parse_validation_rules(milestone)
         except ValueError as exc:
-            return {"ok": False, "message": str(exc), "milestone_id": milestone_id}
+            msg = str(exc)
+            out: dict[str, Any] = {
+                "ok": False,
+                "message": msg,
+                "milestone_id": milestone_id,
+            }
+            if "LLM planner action" in msg and "invalid:" in msg:
+                out["failure_type"] = "planner_format_error"
+                parser_reason = msg
+                bad_action = None
+                m_bad = re.search(r"Bad action:\s*('(?:[^'\\]|\\.)*')", msg)
+                if m_bad:
+                    bad_action = m_bad.group(1)
+                    parser_reason = msg[: m_bad.start()].strip()
+                m_path = re.search(r"Raw planner output saved to:\s*(.+)$", msg)
+                if bad_action is not None:
+                    out["bad_action"] = bad_action
+                out["parser_reason"] = parser_reason
+                if m_path:
+                    out["raw_planner_output_path"] = m_path.group(1).strip()
+            return out
 
         plan.task_id = task_id
 
@@ -1136,7 +1156,20 @@ class Executor:
             preview["review_enforcement"] = payload.get(
                 "review_enforcement", review_enforcement or {}
             )
-            as_emitter(event_bus).emit(
+            planner_meta = payload.get("planner_metadata", {}) or {}
+            norm_events = planner_meta.get("normalization_events") or []
+            bus = as_emitter(event_bus)
+            for ne in norm_events:
+                if not isinstance(ne, dict):
+                    continue
+                bus.emit(
+                    "planner_action_normalized",
+                    action_index=ne.get("action_index"),
+                    original_action=ne.get("original_action"),
+                    normalized_action=ne.get("normalized_action"),
+                    reason=ne.get("reason"),
+                )
+            bus.emit(
                 PLAN_SAVED,
                 plan_id=payload["plan_id"],
                 milestone_id=milestone_id,
