@@ -175,21 +175,18 @@ Guarded workflow:
 ```bash
 forge workflow-guarded --milestone-id 1 --synthesize --apply-plan --gate-test-cmd "pytest"
 ```
-
 ## Contributing / Feedback
 
-Issues and PRs are welcome, especially around:
+Feedback, issues, and discussion are highly encouraged.
 
-- planner robustness and canonical action generation
-- stronger validation against shallow implementations
-- reproducibility and repair-loop convergence
-- ergonomics for real team workflows
-
-If you found a failure mode, include:
-
+If you find a failure mode, please open an issue with:
 - command used
 - relevant run output
-- artifacts from `.forge/runs/` and `.system/results/` if available
+- artifacts from `.forge/runs/` and `.system/results/`
+
+PRs are not the primary contribution path right now.
+
+If you want to contribute code, please open an issue first to discuss the change. This helps keep the system aligned with its design goals (determinism, reproducibility, and controlled execution).
 
 ## License
 
