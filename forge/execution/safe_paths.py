@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 ALLOWED_REL_PREFIXES = ("examples/", "src/", "scripts/", "tests/")
-# Go module metadata lives at repository root (not under src/tests/...).
-ALLOWED_ROOT_FILES = frozenset({"go.mod", "go.sum"})
 
 
 def resolve_safe_project_path(rel: str, base_dir: Path) -> Path:
@@ -20,20 +18,9 @@ def resolve_safe_project_path(rel: str, base_dir: Path) -> Path:
     parts = Path(raw).parts
     if ".." in parts:
         raise ValueError(f"Path traversal not allowed: {rel!r}")
-    if raw in ALLOWED_ROOT_FILES:
-        if len(parts) != 1:
-            raise ValueError(f"Invalid or unsafe path: {rel!r}")
-        full = (base_dir / raw).resolve()
-        base_resolved = base_dir.resolve()
-        try:
-            full.relative_to(base_resolved)
-        except ValueError as exc:
-            raise ValueError(f"Path escapes project root: {rel!r}") from exc
-        return full
     if not any(raw.startswith(p) for p in ALLOWED_REL_PREFIXES):
         raise ValueError(
-            f"Path must start with one of {list(ALLOWED_REL_PREFIXES)} "
-            f"or be one of {sorted(ALLOWED_ROOT_FILES)}; got {rel!r}"
+            f"Path must start with one of {list(ALLOWED_REL_PREFIXES)}; got {rel!r}"
         )
     full = (base_dir / raw).resolve()
     base_resolved = base_dir.resolve()

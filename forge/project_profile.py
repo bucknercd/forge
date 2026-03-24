@@ -72,19 +72,11 @@ _PROFILES: dict[str, ProjectProfile] = {
         validation_hint="path_file_contains for package/function/test names",
         stub_signals=["go_todo_stub", "go_unimplemented_logic"],
         planner_guidance=(
-            "Go profile: always include write_file go.mod at repo root (module line + go "
-            "version) before or with any *.go files so `go test ./...` works. If you add "
-            "*_test.go, also add non-test .go files that implement the behavior under test "
-            "(do not ship tests alone). For HTTP handlers, prefer testing a concrete "
-            "http.Handler with httptest.NewRecorder, or register routes with http.HandleFunc "
-            "before calling http.DefaultServeMux.ServeHTTP; avoid tests that hit the default "
-            "mux with no registration. Avoid Python-style paths (no src/__init__.py)."
+            "Go profile: emit valid package/file/test conventions compatible with "
+            "go test; avoid Python-style imports."
         ),
         repair_guidance=(
-            "Go repair: add or fix go.mod at repo root; ensure every *_test.go has matching "
-            "implementation .go files; register HTTP handlers if tests use "
-            "http.DefaultServeMux, or rewrite tests to use httptest against an explicit "
-            "handler. Keep packages compile-testable with go test ./..."
+            "Go repair: keep package/import conventions coherent and compile-testable."
         ),
     ),
     "terraform": ProjectProfile(

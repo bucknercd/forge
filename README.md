@@ -157,7 +157,9 @@ export FORGE_OPENAI_API_KEY="sk-..."   # or OPENAI_API_KEY
 forge build --idea 'build a Go HTTP server that serves hello world in HTML with headers and colors on / on localhost port 1234'
 ```
 
-**What to expect:** Forge can **generate Go that builds and runs** (e.g. `go run ./src/server.go` or whatever paths the plan wrote—check **`docs/milestones.md`** and the apply log). **Automated post-apply test gates for Go are not a solved story yet**—they’re still Python- and pytest-shaped in practice, so the **end-to-end command may report failure even when your server is fine**. That’s a **known gap**; verify the app with **`go run …`**
+**What to expect:** Forge can **generate Go that builds and runs** (e.g. `go run ./src/server.go` or whatever paths the plan wrote—check **`docs/milestones.md`** and the apply log). **Automated post-apply test gates for Go are not a solved story yet**—they’re still Python- and pytest-shaped in practice, so the **end-to-end command may report failure even when your server is fine**. That’s a **known gap**; verify the app with **`go run …`** / **`go test ./...`** yourself. You can experiment with **`--gate-test-cmd 'go test ./...'`** or **`true`**; see **`.forge/runs/<run_id>/`** for gate output.
+
+**Running Forge’s own tests** (this **Forge** repo, not your Go app): **`pip install -e .`**, then **`pytest`** from the forge checkout.
 
 Vision-file flow (recommended for longer input):
 
@@ -435,7 +437,7 @@ Forge’s supported remote provider today is **OpenAI** (`planner.llm_client`: `
 
    **Prerequisites:** Go on `PATH`. The LLM may place `main` under `src/`, `cmd/`, etc.—follow **`docs/milestones.md`** or the apply output. If the code applied cleanly, try **`http://127.0.0.1:1234/`** after **`go run …`** (path depends on the plan).
 
-   **Known limitation (we’re aware):** **Generated Go can work**; **integrated automated tests / post-apply gates for Go are not reliable yet** (milestones and defaults still skew toward Python/pytest). So **`forge build` may finish apply with good source tree but still fail the overall run** on gates—that’s expected until this improves. **Validate by hand** with **`go run …`**.
+   **Known limitation (we’re aware):** **Generated Go can work**; **integrated automated tests / post-apply gates for Go are not reliable yet** (milestones and defaults still skew toward Python/pytest). So **`forge build` may finish apply with good source tree but still fail the overall run** on gates—that’s expected until this improves. **Validate by hand** with **`go run …`** and **`go test ./...`**; optionally override **`--gate-test-cmd`**. **Forge’s own unit tests** are Python-only: from **this** repository, **`pip install -e .`** then **`pytest`**.
 
 **Voice → file → Forge (long-form vision)**
 
@@ -467,7 +469,7 @@ All non-demo modes need **`planner.llm_client`** set in `forge-policy.json` (typ
 **Bounded file writes**
 
 - Forge action: `write_file <rel_path> | <body>` (use `\n` in the body for newlines).  
-  Allowed prefixes: `examples/`, `src/`, `scripts/`, `tests/`, plus repo-root **`go.mod`** / **`go.sum`** (Go modules).
+  Allowed prefixes: `examples/`, `src/`, `scripts/`, `tests/`.
 - Validation: `path_file_contains <rel_path> <substring>` (substring is the rest of the line). Wrap the substring in `'...'` or `"..."` when it would be token-split by whitespace; outer quotes are stripped and are **not** part of the search text.
 
 **Bounded edits vs `write_file`**
