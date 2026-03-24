@@ -261,24 +261,27 @@ Practical, code-oriented bounded editing (still stdlib-only, no AST):
 Earlier Phase-1 code used "todo" in some identifiers; that is being normalized.
 Compatibility aliases may remain temporarily, but docs/CLI UX should prefer **task**.
 
-#### Phase 1 — Task State Model (persistent, single-active)
+**Roadmap status:** Phase 1 is **complete**. **Phase 2 is the active focus.**
+
+#### Phase 1 — Task State Model (persistent, single-active) — **COMPLETE**
 - **Goal**
   - Introduce durable workflow state where milestone-derived tasks persist with exactly one active task at a time.
-- **Implementation tasks**
+- **Implementation tasks** *(shipped)*
   - Add `.system`-backed task state storage with atomic save/load and corruption-safe defaults.
   - Define task status transitions (`pending`, `active`, `completed`) with explicit invariants.
   - Add service operations to set active task and complete tasks explicitly (no implicit completion).
   - Provide minimal CLI commands for viewing, activating, and completing tasks.
-  - Reuse existing task metadata as source input when bootstrapping prompt-task state.
+  - Reuse existing task metadata as source input when bootstrapping prompt-task state (via `forge prompt-task-sync` / `bootstrap_tasks_from_milestone` reading `.system/tasks/m<id>.json` through `task_service.list_tasks`).
 - **Expected artifacts/files**
   - `forge/prompt_task_state.py` (primary implementation)
   - `forge/prompt_todo_state.py` (temporary compatibility shim)
-  - `forge/cli.py` (minimal command wiring)
-  - `tests/test_prompt_todo_state.py` (existing phase-1 coverage)
+  - `forge/cli.py` (`prompt-task-sync`, `prompt-task-list`, `prompt-task-activate`, `prompt-task-complete`; deprecated `prompt-todo-*` aliases)
+  - `tests/test_prompt_todo_state.py` (phase-1 coverage; imports `forge.prompt_task_state` despite legacy filename)
 
-#### Phase 2 — Milestone/Task to Prompt-Task Expansion
+#### Phase 2 — Milestone/Task to Prompt-Task Expansion — **ACTIVE**
 - **Goal**
   - Materialize milestone-derived task breakdowns into persistent prompt-task state that survives process restarts.
+- **Scope note:** Phase 1 already bootstraps prompt-task rows from `.system/tasks/m<id>.json` when state is empty (`prompt-task-sync`). Phase 2 is the **active** track for a fuller model: reliable projection/reconciliation as task files change, dependency/order fidelity, and test coverage for that path.
 - **Implementation tasks**
   - Add deterministic projection from `.system/tasks/m<id>.json` into prompt-task entries.
   - Preserve ordering/dependencies and emit one active candidate at a time.
@@ -325,8 +328,8 @@ Compatibility aliases may remain temporarily, but docs/CLI UX should prefer **ta
   - `tests/test_task_validation_feedback.py` (new)
 
 #### Ordered build progression
-1. Phase 1: durable single-active task state primitives.
-2. Phase 2: deterministic milestone-task → prompt-task projection.
+1. Phase 1: durable single-active task state primitives — **done.**
+2. Phase 2: deterministic milestone-task → prompt-task projection — **current work.**
 3. Phase 3: prompt compiler for active task.
-4. Phase 4: explicit command-driven state transitions owned by Forge.
+4. Phase 4: explicit command-driven state transitions owned by Forge (baseline activate/complete exists; phase focuses on agent handshake + logging/provenance).
 5. Phase 5: validation and repair feedback integrated with task lifecycle.
