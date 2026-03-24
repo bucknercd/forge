@@ -271,8 +271,8 @@ Compatibility aliases may remain temporarily, but docs/CLI UX should prefer **ta
   - Provide minimal CLI commands for viewing, activating, and completing tasks.
   - Reuse existing task metadata as source input when bootstrapping prompt-task state.
 - **Expected artifacts/files**
-  - `forge/prompt_task_state.py` (preferred facade)
-  - `forge/prompt_todo_state.py` (legacy-compatible internals)
+  - `forge/prompt_task_state.py` (primary implementation)
+  - `forge/prompt_todo_state.py` (temporary compatibility shim)
   - `forge/cli.py` (minimal command wiring)
   - `tests/test_prompt_todo_state.py` (existing phase-1 coverage)
 

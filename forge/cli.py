@@ -479,7 +479,7 @@ class ForgeCLI:
             print(
                 json.dumps(
                     {
-                        "active_task_id": state.active_todo_id,
+                        "active_task_id": state.active_task_id,
                         "tasks": [asdict(t) for t in tasks],
                     },
                     indent=2,
@@ -490,7 +490,7 @@ class ForgeCLI:
         if not tasks:
             print("No prompt tasks found. Bootstrap with `forge prompt-task-sync --milestone <id>`.")
             return
-        print(f"Prompt tasks (active: {state.active_todo_id if state.active_todo_id else '—'}):")
+        print(f"Prompt tasks (active: {state.active_task_id if state.active_task_id else '—'}):")
         for t in tasks:
             obj = (t.objective or "").replace("\n", " ").strip()
             if len(obj) > 100:
@@ -504,8 +504,8 @@ class ForgeCLI:
         payload = {
             "ok": True,
             "milestone_id": milestone_id,
-            "active_task_id": state.active_todo_id,
-            "task_count": len(state.todos),
+            "active_task_id": state.active_task_id,
+            "task_count": len(state.tasks),
             "force": force,
         }
         if json_mode:
@@ -513,7 +513,7 @@ class ForgeCLI:
         else:
             print(
                 f"Prompt tasks synced from milestone {milestone_id}: "
-                f"{len(state.todos)} task(s), active={state.active_todo_id if state.active_todo_id else '—'}."
+                f"{len(state.tasks)} task(s), active={state.active_task_id if state.active_task_id else '—'}."
             )
         return True
 
@@ -527,11 +527,11 @@ class ForgeCLI:
             else:
                 print(str(exc))
             return False
-        payload = {"ok": True, "active_task_id": state.active_todo_id}
+        payload = {"ok": True, "active_task_id": state.active_task_id}
         if json_mode:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
-            print(f"Active prompt task set to {state.active_todo_id}.")
+            print(f"Active prompt task set to {state.active_task_id}.")
         return True
 
     @staticmethod
@@ -544,13 +544,13 @@ class ForgeCLI:
             else:
                 print(str(exc))
             return False
-        payload = {"ok": True, "completed_task_id": task_id, "active_task_id": state.active_todo_id}
+        payload = {"ok": True, "completed_task_id": task_id, "active_task_id": state.active_task_id}
         if json_mode:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
             print(
                 f"Completed prompt task {task_id}. "
-                f"Active task is now {state.active_todo_id if state.active_todo_id else '—'}."
+                f"Active task is now {state.active_task_id if state.active_task_id else '—'}."
             )
         return True
 
