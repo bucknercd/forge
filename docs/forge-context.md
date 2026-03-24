@@ -255,70 +255,73 @@ Practical, code-oriented bounded editing (still stdlib-only, no AST):
 - **Diffs**: emit a unified diff with context lines and a `# forge-action:` header tied to the action
 - **Safety**: zero matches, ambiguous matches, invalid ranges, or malformed payloads fail safely with no partial write
 
-### Active TODO
+### Prompt-Driven Pivot Roadmap
 
-1. Shift Forge toward an automated dev-loop runner
-   - move from generic retry to explicit failure classification
-   - introduce repair modes (`format_fix`, `syntax_fix`, `behavior_fix`, `missing_impl`, `validation_bug`, `no_op_repair`, `unknown_failure`)
-   - generate targeted repair prompts based on failure type
-   - keep human escalation only for repeated or ambiguous failures
+#### Phase 1 — Todo State Model (persistent, single-active)
+- **Goal**
+  - Introduce durable workflow state where milestones/tasks can be represented as persistent todos with exactly one active todo at a time.
+- **Implementation tasks**
+  - Add `.system`-backed todo state storage with atomic save/load and corruption-safe defaults.
+  - Define todo status transitions (`pending`, `active`, `completed`) with explicit invariants.
+  - Add service operations to set active todo and complete todos explicitly (no implicit completion).
+  - Provide minimal CLI commands for viewing, activating, and completing todos.
+  - Reuse existing task metadata as source input when bootstrapping todos.
+- **Expected artifacts/files**
+  - `forge/prompt_todo_state.py` (new)
+  - `forge/cli.py` (minimal command wiring)
+  - `tests/test_prompt_todo_state.py` (new)
 
-2. Preserve strict core / tolerant boundary architecture
-   - tolerate harmless LLM formatting noise only at ingestion boundaries
-   - normalize into canonical internal actions/plans
-   - keep executor deterministic and strict
-   - persist raw artifacts for every failed boundary
+#### Phase 2 — Milestone/Task to Todo Expansion
+- **Goal**
+  - Materialize milestone-derived task breakdowns into persistent todo state that survives process restarts.
+- **Implementation tasks**
+  - Add deterministic projection from `.system/tasks/m<id>.json` into todo entries.
+  - Preserve ordering/dependencies and emit one active candidate at a time.
+  - Track source linkage (`milestone_id`, `task_id`) on each todo for traceability.
+- **Expected artifacts/files**
+  - `forge/task_service.py` (integration hooks)
+  - `forge/prompt_todo_state.py` (source-sync functions)
+  - `tests/test_task_to_todo_projection.py` (new)
 
-3. Strengthen success criteria
-   - prevent structural stubs from passing as completed work
-   - improve generated validations toward behavioral checks where feasible
-   - detect placeholder/stub outputs explicitly
-   - distinguish “compiles” from “works”
+#### Phase 3 — Prompt Compiler (Todo → Cursor Prompt)
+- **Goal**
+  - Compile the active todo into a stable prompt payload that can be handed to Cursor without mutating Forge state directly.
+- **Implementation tasks**
+  - Add deterministic prompt rendering from todo + context docs.
+  - Include explicit acceptance criteria and bounded file/action hints.
+  - Persist generated prompt artifacts for inspection/debugging.
+- **Expected artifacts/files**
+  - `forge/prompt_compiler.py` (new)
+  - `.system/prompts/` artifacts (new directory usage)
+  - `tests/test_prompt_compiler.py` (new)
 
-4. Simplify top-level CLI UX
-   - add high-level commands for common workflows
-   - keep existing granular/power-user commands available
-   - reduce need to understand internal workflow names for basic usage
+#### Phase 4 — Execution Handshake + State Ownership
+- **Goal**
+  - Ensure Forge remains sole owner of workflow state transitions while coding agents only return outputs.
+- **Implementation tasks**
+  - Add explicit “start active todo” and “complete active todo” command flow.
+  - Gate completion on explicit Forge command + optional validation checks.
+  - Record state transition events in run history with clear provenance.
+- **Expected artifacts/files**
+  - `forge/cli.py` (state transition commands)
+  - `forge/run_history.py` / event payload updates
+  - `tests/test_prompt_workflow_transitions.py` (new)
 
-### Next TODOs (Stabilization Phase)
+#### Phase 5 — Validation + Repair Feedback for Prompt Workflow
+- **Goal**
+  - Keep existing deterministic safety model while adapting validation/repair to todo/prompt execution.
+- **Implementation tasks**
+  - Connect todo completion checks to existing validator and gate outputs.
+  - Persist actionable failure feedback per todo for follow-up prompt generation.
+  - Prevent no-op loops by detecting unchanged todo outcomes.
+- **Expected artifacts/files**
+  - `forge/validator.py` (todo-aware entrypoints)
+  - `forge/task_feedback.py` (todo linkage)
+  - `tests/test_todo_validation_feedback.py` (new)
 
-5. Add failure classification and repair-mode engine
-   - deterministic classifier over validation/test/parser/planner failures
-   - structured failure metadata persisted with runs
-   - targeted repair prompts per failure type
-   - stop generic blind retry loops
-
-6. Detect and stop no-op repair loops
-   - compare plan IDs, action sets, file hashes, and validation outcomes
-   - surface “no effective change” clearly
-   - escalate earlier instead of wasting retries
-
-7. Improve behavioral validation generation
-   - synthesize stronger tests for simple CLI/file-processing tasks
-   - prefer behavioral assertions over shape-only checks
-   - ensure stub implementations fail
-
-8. Improve planner and milestone robustness
-   - continue reducing fragile action shapes
-   - prefer bounded edits or safer canonical actions where appropriate
-   - keep internal transport formats strict and machine-only
-
-9. Add end-to-end regression coverage
-   - full workflow tests with mocked/sloppy LLM outputs
-   - deterministic replay of normalized milestone → plan → apply → validate
-   - regression tests for previously observed boundary failures
-   - artifact persistence on all failure classes
-
-10. Introduce simplified CLI commands
-   - `forge start`
-   - `forge build`
-   - `forge fix`
-   - `forge status`
-   - `forge doctor`
-   - `forge logs`
-
-11. Improve observability
-   - run summaries with failure classification
-   - show latest artifact paths and reviewed plans
-   - record repair mode chosen and why
-   - make internal debugging rich without exposing ugly internals to end users
+#### Ordered build progression
+1. Phase 1: durable single-active todo state primitives.
+2. Phase 2: deterministic task → todo expansion.
+3. Phase 3: prompt compiler for active todo.
+4. Phase 4: explicit command-driven state transitions owned by Forge.
+5. Phase 5: validation and repair feedback integrated with todo lifecycle.
