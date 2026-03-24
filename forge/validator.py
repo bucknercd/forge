@@ -3,6 +3,7 @@ import json
 from forge.design_manager import MilestoneService
 from forge.execution.plan import ExecutionPlanBuilder
 from forge.execution.validation_rules import validate_all_rules
+from forge.go_workspace_coherence import check_go_workspace_coherence
 from forge.validation_normalize import sanitize_validation_rules
 
 _MILESTONES_DOC = "docs/milestones.md"
@@ -101,6 +102,10 @@ class Validator:
         ok, reason = validate_all_rules(rules, Paths)
         if not ok:
             return False, reason
+
+        ok_go, reason_go = check_go_workspace_coherence(Paths.BASE_DIR)
+        if not ok_go:
+            return False, reason_go
 
         return True, ""
 

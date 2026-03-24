@@ -219,6 +219,13 @@ def _is_substantive_code_action(action: str) -> bool:
     if _has_forge_init_marker(a):
         return False
     if a.startswith("write_file "):
+        payload = a[len("write_file ") :]
+        if " | " in payload:
+            path_tok = payload.split(" | ", 1)[0].strip()
+        else:
+            path_tok = payload.strip()
+        if path_tok in ("go.mod", "go.sum"):
+            return True
         for root in _CODE_ROOTS:
             if a.startswith(f"write_file {root}"):
                 return True

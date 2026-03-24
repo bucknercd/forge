@@ -213,6 +213,7 @@ Current file creation/edit support includes:
 - `src/`
 - `scripts/`
 - `tests/`
+- repository root **`go.mod`** / **`go.sum`** (Go modules only)
 
 See README Quick Start (vertical slice) for usage and expected behavior.
 
@@ -238,7 +239,7 @@ Structured run events ship for **`forge vertical-slice`** (and the same bus/hook
 Event types include: `run_started`, `phase_started`, `phase_completed`, `artifact_written`, `plan_saved`, `action_applied`, `validation_started`, `validation_completed`, `run_completed`, `run_failed`.
 
 #### Bounded file edits (first slice)
-Forge supports **minimal bounded edit actions** on allowed repo paths (`examples/`, `src/`, `scripts/`, `tests/`) using deterministic text-matching rules:
+Forge supports **minimal bounded edit actions** on allowed repo paths (`examples/`, `src/`, `scripts/`, `tests/`, plus root `go.mod` / `go.sum`) using deterministic text-matching rules:
 
 - `insert_after_in_file`, `insert_before_in_file`, `replace_text_in_file`, `replace_block_in_file`
 - Separators: literal ` @@FORGE@@ ` between payload parts; `\\n` escapes in payloads
