@@ -39,6 +39,10 @@ from forge.execution.section_ops import (
     replace_section_body,
 )
 from forge.execution.text_diff import unified_diff_bounded
+from forge.execution.write_body_sanitize import (
+    sanitize_write_file_body,
+    should_ensure_src_init_py,
+)
 from forge.execution.write_file_integrity import (
     log_write_file_payload_stage,
     verify_write_file_disk_matches,
@@ -162,13 +166,19 @@ class ArtifactActionApplier:
         *,
         dry_run: bool = False,
         event_bus: Any = None,
+        project_profile: str | None = None,
     ) -> ApplyResult:
         bus = as_emitter(event_bus)
         result = ApplyResult()
         for action in plan.actions:
             try:
                 self._apply_one(
-                    action, milestone, result, dry_run=dry_run, event_bus=bus
+                    action,
+                    milestone,
+                    result,
+                    dry_run=dry_run,
+                    event_bus=bus,
+                    project_profile=project_profile,
                 )
             except Exception as exc:  # noqa: BLE001 — surface as execution error string
                 err = str(exc)
@@ -241,6 +251,7 @@ class ArtifactActionApplier:
         *,
         dry_run: bool,
         event_bus: Any = None,
+        project_profile: str | None = None,
     ) -> None:
         if isinstance(action, ActionAppendSection):
             path = self._resolve(action.target)
@@ -389,6 +400,13 @@ class ArtifactActionApplier:
                 after, imports_rewritten = _rewrite_imports_examples_to_src(after)
                 if imports_rewritten:
                     norm_extra["imports_rewritten"] = True
+            after, sanitize_meta = sanitize_write_file_body(
+                after,
+                normalized_rel_path=normalized_rel_path,
+                project_profile=project_profile,
+            )
+            if sanitize_meta:
+                norm_extra["write_body_sanitize"] = sanitize_meta
             log_write_file_payload_stage(
                 normalized_rel_path, after, "before_write", line_no=None
             )
@@ -399,7 +417,10 @@ class ArtifactActionApplier:
                     verify_write_file_disk_matches(
                         path, after, rel_path=normalized_rel_path
                     )
-                    if normalized_rel_path.startswith("src/"):
+                    if should_ensure_src_init_py(
+                        normalized_rel_path=normalized_rel_path,
+                        project_profile=project_profile,
+                    ):
                         init_path = self._paths.BASE_DIR / "src" / "__init__.py"
                         if not init_path.exists():
                             init_path.parent.mkdir(parents=True, exist_ok=True)

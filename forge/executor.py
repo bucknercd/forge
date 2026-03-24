@@ -1398,7 +1398,10 @@ class Executor:
                 plan=plan,
             )
         applier = ArtifactActionApplier(Paths)
-        dry = applier.apply(plan, milestone, dry_run=True)
+        project_profile = project_profile_for_task_ir(task_ir).profile_name
+        dry = applier.apply(
+            plan, milestone, dry_run=True, project_profile=project_profile
+        )
         effective_mode = str(planner_meta.get("mode") or policy_mode)
         out: dict = {
             "ok": len(dry.errors) == 0,
@@ -1635,10 +1638,21 @@ class Executor:
                         }
                     )
                     return out
+        apply_project_profile: str | None = None
+        if task_id is not None:
+            task_for_profile = get_task(milestone_id, task_id)
+            if task_for_profile is not None:
+                apply_project_profile = project_profile_for_task_ir(
+                    compile_task_to_ir(task_for_profile)
+                ).profile_name
         applier = ArtifactActionApplier(Paths)
         bus.emit(PHASE_STARTED, phase="apply", label="execute reviewed plan")
         apply_result = applier.apply(
-            reviewed_plan, apply_milestone, dry_run=False, event_bus=bus
+            reviewed_plan,
+            apply_milestone,
+            dry_run=False,
+            event_bus=bus,
+            project_profile=apply_project_profile,
         )
         apply_ok = len(apply_result.errors) == 0
         bus.emit(
@@ -1941,7 +1955,7 @@ class Executor:
             return
 
         applier = ArtifactActionApplier(Paths)
-        apply_result = applier.apply(plan, milestone)
+        apply_result = applier.apply(plan, milestone, project_profile=None)
 
         files_norm = apply_result.normalized_files_changed()
         summary = _build_execution_summary(len(plan.actions), apply_result)
