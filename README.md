@@ -47,6 +47,7 @@ Forge is promising and actively evolving, but not fully end-to-end reliable for 
 - core loop works for many scenarios
 - robustness and planner hardening are in progress
 - some flows still need iterative fixes and tighter guardrails
+- **Go (and other non-Python stacks):** LLM flows can **produce working code** (e.g. a server you `go run`), but **automated post-apply test gates for those stacks are not solid yet**—that’s a known gap, not something you misconfigured
 
 This repository should be read as an in-progress systems project focused on correctness, control, and reproducibility.
 
@@ -132,6 +133,34 @@ Run with your own intent:
 forge vertical-slice --idea "Small FastAPI service with a /health endpoint"
 ```
 
+**Try a real greenfield app:** `forge build` is the same engine as `vertical-slice`. With policy + API key, one command can scaffold a whole slice (docs, tasks, plan, apply, gates). Example — **Go HTTP server on port 1234** (install **[Go](https://go.dev/dl/)** so you can run the generated code yourself):
+
+```bash
+mkdir gotest && cd gotest
+forge init
+
+cat > forge-policy.json <<'EOF'
+{
+  "planner": {
+    "mode": "llm",
+    "llm_client": "openai",
+    "llm_model": "gpt-4o"
+  },
+  "task_execution": {
+    "max_repair_attempts": 3
+  }
+}
+EOF
+
+export FORGE_OPENAI_API_KEY="sk-..."   # or OPENAI_API_KEY
+
+forge build --idea 'build a Go HTTP server that serves hello world in HTML with headers and colors on / on localhost port 1234'
+```
+
+**What to expect:** Forge can **generate Go that builds and runs** (e.g. `go run ./src/server.go` or whatever paths the plan wrote—check **`docs/milestones.md`** and the apply log). **Automated post-apply test gates for Go are not a solved story yet**—they’re still Python- and pytest-shaped in practice, so the **end-to-end command may report failure even when your server is fine**. That’s a **known gap**; verify the app with **`go run …`** / **`go test ./...`** yourself. You can experiment with **`--gate-test-cmd 'go test ./...'`** or **`true`**; see **`.forge/runs/<run_id>/`** for gate output.
+
+**Running Forge’s own tests** (this **Forge** repo, not your Go app): **`pip install -e .`**, then **`pytest`** from the forge checkout.
+
 Vision-file flow (recommended for longer input):
 
 ```bash
@@ -166,6 +195,7 @@ End-to-end:
 ```bash
 forge vertical-slice --demo
 forge vertical-slice --idea "Your short idea"
+forge build --idea "Go HTTP server on :1234 with styled HTML on /"   # alias; needs policy + API key
 forge vertical-slice --from-vision
 forge vertical-slice --vision-file ./notes/vision.txt
 ```
@@ -381,6 +411,34 @@ Forge’s supported remote provider today is **OpenAI** (`planner.llm_client`: `
 
    Use `--gate-test-cmd 'pytest -q'` (or similar) to match whatever the LLM milestone expects.
 
+4. **Optional copy-paste: Go HTTP server (`forge build`)** — same as `vertical-slice`, different subcommand. If you pass `--idea`, you do **not** need `--no-demo` (the demo is skipped automatically).
+
+   ```bash
+   mkdir gotest && cd gotest
+   forge init
+
+   cat > forge-policy.json <<'EOF'
+   {
+     "planner": {
+       "mode": "llm",
+       "llm_client": "openai",
+       "llm_model": "gpt-4o"
+     },
+     "task_execution": {
+       "max_repair_attempts": 3
+     }
+   }
+   EOF
+
+   export FORGE_OPENAI_API_KEY="sk-..."   # or OPENAI_API_KEY
+
+   forge build --idea 'build a Go HTTP server that serves hello world in HTML with headers and colors on / on localhost port 1234'
+   ```
+
+   **Prerequisites:** Go on `PATH`. The LLM may place `main` under `src/`, `cmd/`, etc.—follow **`docs/milestones.md`** or the apply output. If the code applied cleanly, try **`http://127.0.0.1:1234/`** after **`go run …`** (path depends on the plan).
+
+   **Known limitation (we’re aware):** **Generated Go can work**; **integrated automated tests / post-apply gates for Go are not reliable yet** (milestones and defaults still skew toward Python/pytest). So **`forge build` may finish apply with good source tree but still fail the overall run** on gates—that’s expected until this improves. **Validate by hand** with **`go run …`** and **`go test ./...`**; optionally override **`--gate-test-cmd`**. **Forge’s own unit tests** are Python-only: from **this** repository, **`pip install -e .`** then **`pytest`**.
+
 **Voice → file → Forge (long-form vision)**
 
 For longer ideas, dictation, or iteration in an editor, put the vision in a file instead of the CLI. Forge uses that text as the **source of truth** for `docs/vision.txt` and asks the LLM only for requirements, architecture, and milestones (vision is **not** regenerated).
@@ -501,6 +559,7 @@ pip install -e .
 ```bash
 forge vertical-slice --demo
 forge vertical-slice --idea "Your short idea"
+forge build --idea "Go HTTP server on :1234; styled HTML on /"   # same as vertical-slice + --idea
 forge vertical-slice --from-vision          # uses docs/vision.txt
 forge vertical-slice --vision-file ./notes/vision.txt
 ```
