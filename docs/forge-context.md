@@ -257,37 +257,42 @@ Practical, code-oriented bounded editing (still stdlib-only, no AST):
 
 ### Prompt-Driven Pivot Roadmap
 
-#### Phase 1 — Todo State Model (persistent, single-active)
-- **Goal**
-  - Introduce durable workflow state where milestones/tasks can be represented as persistent todos with exactly one active todo at a time.
-- **Implementation tasks**
-  - Add `.system`-backed todo state storage with atomic save/load and corruption-safe defaults.
-  - Define todo status transitions (`pending`, `active`, `completed`) with explicit invariants.
-  - Add service operations to set active todo and complete todos explicitly (no implicit completion).
-  - Provide minimal CLI commands for viewing, activating, and completing todos.
-  - Reuse existing task metadata as source input when bootstrapping todos.
-- **Expected artifacts/files**
-  - `forge/prompt_todo_state.py` (new)
-  - `forge/cli.py` (minimal command wiring)
-  - `tests/test_prompt_todo_state.py` (new)
+**Design note (terminology):** user-facing workflow language is **task-first**.
+Earlier Phase-1 code used "todo" in some identifiers; that is being normalized.
+Compatibility aliases may remain temporarily, but docs/CLI UX should prefer **task**.
 
-#### Phase 2 — Milestone/Task to Todo Expansion
+#### Phase 1 — Task State Model (persistent, single-active)
 - **Goal**
-  - Materialize milestone-derived task breakdowns into persistent todo state that survives process restarts.
+  - Introduce durable workflow state where milestone-derived tasks persist with exactly one active task at a time.
 - **Implementation tasks**
-  - Add deterministic projection from `.system/tasks/m<id>.json` into todo entries.
+  - Add `.system`-backed task state storage with atomic save/load and corruption-safe defaults.
+  - Define task status transitions (`pending`, `active`, `completed`) with explicit invariants.
+  - Add service operations to set active task and complete tasks explicitly (no implicit completion).
+  - Provide minimal CLI commands for viewing, activating, and completing tasks.
+  - Reuse existing task metadata as source input when bootstrapping prompt-task state.
+- **Expected artifacts/files**
+  - `forge/prompt_task_state.py` (preferred facade)
+  - `forge/prompt_todo_state.py` (legacy-compatible internals)
+  - `forge/cli.py` (minimal command wiring)
+  - `tests/test_prompt_todo_state.py` (existing phase-1 coverage)
+
+#### Phase 2 — Milestone/Task to Prompt-Task Expansion
+- **Goal**
+  - Materialize milestone-derived task breakdowns into persistent prompt-task state that survives process restarts.
+- **Implementation tasks**
+  - Add deterministic projection from `.system/tasks/m<id>.json` into prompt-task entries.
   - Preserve ordering/dependencies and emit one active candidate at a time.
-  - Track source linkage (`milestone_id`, `task_id`) on each todo for traceability.
+  - Track source linkage (`milestone_id`, `task_id`) on each prompt task for traceability.
 - **Expected artifacts/files**
   - `forge/task_service.py` (integration hooks)
-  - `forge/prompt_todo_state.py` (source-sync functions)
-  - `tests/test_task_to_todo_projection.py` (new)
+  - `forge/prompt_task_state.py` (source-sync functions)
+  - `tests/test_task_to_prompt_task_projection.py` (new)
 
-#### Phase 3 — Prompt Compiler (Todo → Cursor Prompt)
+#### Phase 3 — Prompt Compiler (Task → Cursor Prompt)
 - **Goal**
-  - Compile the active todo into a stable prompt payload that can be handed to Cursor without mutating Forge state directly.
+  - Compile the active task into a stable prompt payload that can be handed to Cursor without mutating Forge state directly.
 - **Implementation tasks**
-  - Add deterministic prompt rendering from todo + context docs.
+  - Add deterministic prompt rendering from active task + context docs.
   - Include explicit acceptance criteria and bounded file/action hints.
   - Persist generated prompt artifacts for inspection/debugging.
 - **Expected artifacts/files**
@@ -299,7 +304,7 @@ Practical, code-oriented bounded editing (still stdlib-only, no AST):
 - **Goal**
   - Ensure Forge remains sole owner of workflow state transitions while coding agents only return outputs.
 - **Implementation tasks**
-  - Add explicit “start active todo” and “complete active todo” command flow.
+  - Add explicit “start active task” and “complete active task” command flow.
   - Gate completion on explicit Forge command + optional validation checks.
   - Record state transition events in run history with clear provenance.
 - **Expected artifacts/files**
@@ -309,19 +314,19 @@ Practical, code-oriented bounded editing (still stdlib-only, no AST):
 
 #### Phase 5 — Validation + Repair Feedback for Prompt Workflow
 - **Goal**
-  - Keep existing deterministic safety model while adapting validation/repair to todo/prompt execution.
+  - Keep existing deterministic safety model while adapting validation/repair to task/prompt execution.
 - **Implementation tasks**
-  - Connect todo completion checks to existing validator and gate outputs.
-  - Persist actionable failure feedback per todo for follow-up prompt generation.
-  - Prevent no-op loops by detecting unchanged todo outcomes.
+  - Connect active-task completion checks to existing validator and gate outputs.
+  - Persist actionable failure feedback per task for follow-up prompt generation.
+  - Prevent no-op loops by detecting unchanged task outcomes.
 - **Expected artifacts/files**
-  - `forge/validator.py` (todo-aware entrypoints)
-  - `forge/task_feedback.py` (todo linkage)
-  - `tests/test_todo_validation_feedback.py` (new)
+  - `forge/validator.py` (task-aware entrypoints)
+  - `forge/task_feedback.py` (task linkage)
+  - `tests/test_task_validation_feedback.py` (new)
 
 #### Ordered build progression
-1. Phase 1: durable single-active todo state primitives.
-2. Phase 2: deterministic task → todo expansion.
-3. Phase 3: prompt compiler for active todo.
+1. Phase 1: durable single-active task state primitives.
+2. Phase 2: deterministic milestone-task → prompt-task projection.
+3. Phase 3: prompt compiler for active task.
 4. Phase 4: explicit command-driven state transitions owned by Forge.
-5. Phase 5: validation and repair feedback integrated with todo lifecycle.
+5. Phase 5: validation and repair feedback integrated with task lifecycle.

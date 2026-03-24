@@ -1,9 +1,9 @@
 """
-Persistent todo state for prompt-driven workflow.
+Persistent prompt-task state for prompt-driven workflow.
 
 Phase 1 scope:
 - File-based durable storage under .system/
-- Exactly one active todo at a time
+- Exactly one active task at a time
 - Explicit activation/completion APIs (no implicit completion side effects)
 """
 
@@ -63,14 +63,19 @@ class PromptTodoState:
     todos: list[PromptTodo]
 
     def to_dict(self) -> dict[str, Any]:
+        # Persist task-first keys; keep legacy aliases in loader only.
         return {
             "version": self.version,
-            "active_todo_id": self.active_todo_id,
-            "todos": [asdict(t) for t in self.todos],
+            "active_task_id": self.active_todo_id,
+            "tasks": [asdict(t) for t in self.todos],
         }
 
 
 def todo_state_path() -> Path:
+    return Paths.SYSTEM_DIR / "prompt_tasks.json"
+
+
+def _legacy_todo_state_path() -> Path:
     return Paths.SYSTEM_DIR / "prompt_todos.json"
 
 
@@ -111,16 +116,24 @@ def _normalize_single_active(state: PromptTodoState) -> PromptTodoState:
 
 def load_todo_state() -> PromptTodoState:
     path = todo_state_path()
+    if not path.exists() and _legacy_todo_state_path().exists():
+        path = _legacy_todo_state_path()
     if not path.exists():
         return default_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        todos = [PromptTodo.from_dict(t) for t in list(raw.get("todos", []))]
+        tasks_blob = raw.get("tasks")
+        if tasks_blob is None:
+            tasks_blob = raw.get("todos", [])
+        todos = [PromptTodo.from_dict(t) for t in list(tasks_blob)]
+        active_raw = raw.get("active_task_id")
+        if active_raw is None:
+            active_raw = raw.get("active_todo_id")
         state = PromptTodoState(
             version=int(raw.get("version", _STATE_VERSION)),
             active_todo_id=(
-                int(raw["active_todo_id"])
-                if raw.get("active_todo_id") is not None
+                int(active_raw)
+                if active_raw is not None
                 else None
             ),
             todos=todos,
@@ -139,6 +152,13 @@ def save_todo_state(state: PromptTodoState) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(path)
+    # One-way migration: remove legacy path after successful canonical write.
+    legacy = _legacy_todo_state_path()
+    if legacy.exists() and legacy != path:
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
 
 
 def list_prompt_todos() -> list[PromptTodo]:
@@ -216,7 +236,7 @@ def complete_todo(todo_id: int) -> PromptTodoState:
 
 def bootstrap_todos_from_tasks(milestone_id: int, *, force: bool = False) -> PromptTodoState:
     """
-    Reuse existing task decomposition as the initial todo inventory.
+    Reuse existing task decomposition as the initial prompt-task inventory.
     """
     state = load_todo_state()
     if state.todos and not force:
@@ -244,3 +264,28 @@ def bootstrap_todos_from_tasks(milestone_id: int, *, force: bool = False) -> Pro
     new_state = PromptTodoState(version=_STATE_VERSION, active_todo_id=active_id, todos=todos)
     save_todo_state(new_state)
     return load_todo_state()
+
+
+# Task-first aliases (preferred API names).
+def load_prompt_task_state() -> PromptTodoState:
+    return load_todo_state()
+
+
+def save_prompt_task_state(state: PromptTodoState) -> None:
+    save_todo_state(state)
+
+
+def list_prompt_tasks() -> list[PromptTodo]:
+    return list_prompt_todos()
+
+
+def set_active_task(task_id: int) -> PromptTodoState:
+    return set_active_todo(task_id)
+
+
+def complete_task(task_id: int) -> PromptTodoState:
+    return complete_todo(task_id)
+
+
+def bootstrap_tasks_from_milestone(milestone_id: int, *, force: bool = False) -> PromptTodoState:
+    return bootstrap_todos_from_tasks(milestone_id, force=force)

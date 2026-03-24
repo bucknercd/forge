@@ -60,12 +60,12 @@ from forge.task_service import (
     task_count_for_milestone,
 )
 from forge.fresh_start import reset_generated_only
-from forge.prompt_todo_state import (
-    bootstrap_todos_from_tasks,
-    complete_todo,
-    list_prompt_todos,
-    load_todo_state,
-    set_active_todo,
+from forge.prompt_task_state import (
+    bootstrap_tasks_from_milestone,
+    complete_task,
+    list_prompt_tasks,
+    load_prompt_task_state,
+    set_active_task,
 )
 
 
@@ -472,26 +472,26 @@ class ForgeCLI:
             print(f"  - {line}")
 
     @staticmethod
-    def prompt_todo_list(json_mode: bool = False) -> None:
-        state = load_todo_state()
-        todos = list_prompt_todos()
+    def prompt_task_list(json_mode: bool = False) -> None:
+        state = load_prompt_task_state()
+        tasks = list_prompt_tasks()
         if json_mode:
             print(
                 json.dumps(
                     {
-                        "active_todo_id": state.active_todo_id,
-                        "todos": [asdict(t) for t in todos],
+                        "active_task_id": state.active_todo_id,
+                        "tasks": [asdict(t) for t in tasks],
                     },
                     indent=2,
                     sort_keys=True,
                 )
             )
             return
-        if not todos:
-            print("No prompt todos found. Bootstrap with `forge prompt-todo-sync --milestone <id>`.")
+        if not tasks:
+            print("No prompt tasks found. Bootstrap with `forge prompt-task-sync --milestone <id>`.")
             return
-        print(f"Prompt todos (active: {state.active_todo_id if state.active_todo_id else '—'}):")
-        for t in todos:
+        print(f"Prompt tasks (active: {state.active_todo_id if state.active_todo_id else '—'}):")
+        for t in tasks:
             obj = (t.objective or "").replace("\n", " ").strip()
             if len(obj) > 100:
                 obj = obj[:97] + "…"
@@ -499,60 +499,77 @@ class ForgeCLI:
             print(f"      objective: {obj or '—'}")
 
     @staticmethod
-    def prompt_todo_sync(milestone_id: int, *, force: bool = False, json_mode: bool = False) -> bool:
-        state = bootstrap_todos_from_tasks(milestone_id, force=force)
+    def prompt_task_sync(milestone_id: int, *, force: bool = False, json_mode: bool = False) -> bool:
+        state = bootstrap_tasks_from_milestone(milestone_id, force=force)
         payload = {
             "ok": True,
             "milestone_id": milestone_id,
-            "active_todo_id": state.active_todo_id,
-            "todo_count": len(state.todos),
+            "active_task_id": state.active_todo_id,
+            "task_count": len(state.todos),
             "force": force,
         }
         if json_mode:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
             print(
-                f"Prompt todos synced from milestone {milestone_id}: "
-                f"{len(state.todos)} todo(s), active={state.active_todo_id if state.active_todo_id else '—'}."
+                f"Prompt tasks synced from milestone {milestone_id}: "
+                f"{len(state.todos)} task(s), active={state.active_todo_id if state.active_todo_id else '—'}."
             )
         return True
 
     @staticmethod
-    def prompt_todo_activate(todo_id: int, *, json_mode: bool = False) -> bool:
+    def prompt_task_activate(task_id: int, *, json_mode: bool = False) -> bool:
         try:
-            state = set_active_todo(todo_id)
+            state = set_active_task(task_id)
         except ValueError as exc:
             if json_mode:
                 print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
             else:
                 print(str(exc))
             return False
-        payload = {"ok": True, "active_todo_id": state.active_todo_id}
+        payload = {"ok": True, "active_task_id": state.active_todo_id}
         if json_mode:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
-            print(f"Active prompt todo set to {state.active_todo_id}.")
+            print(f"Active prompt task set to {state.active_todo_id}.")
         return True
 
     @staticmethod
-    def prompt_todo_complete(todo_id: int, *, json_mode: bool = False) -> bool:
+    def prompt_task_complete(task_id: int, *, json_mode: bool = False) -> bool:
         try:
-            state = complete_todo(todo_id)
+            state = complete_task(task_id)
         except ValueError as exc:
             if json_mode:
                 print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
             else:
                 print(str(exc))
             return False
-        payload = {"ok": True, "completed_todo_id": todo_id, "active_todo_id": state.active_todo_id}
+        payload = {"ok": True, "completed_task_id": task_id, "active_task_id": state.active_todo_id}
         if json_mode:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
             print(
-                f"Completed prompt todo {todo_id}. "
-                f"Active todo is now {state.active_todo_id if state.active_todo_id else '—'}."
+                f"Completed prompt task {task_id}. "
+                f"Active task is now {state.active_todo_id if state.active_todo_id else '—'}."
             )
         return True
+
+    # Backward-compatible aliases (deprecated task terminology migration).
+    @staticmethod
+    def prompt_todo_list(json_mode: bool = False) -> None:
+        ForgeCLI.prompt_task_list(json_mode=json_mode)
+
+    @staticmethod
+    def prompt_todo_sync(milestone_id: int, *, force: bool = False, json_mode: bool = False) -> bool:
+        return ForgeCLI.prompt_task_sync(milestone_id, force=force, json_mode=json_mode)
+
+    @staticmethod
+    def prompt_todo_activate(todo_id: int, *, json_mode: bool = False) -> bool:
+        return ForgeCLI.prompt_task_activate(todo_id, json_mode=json_mode)
+
+    @staticmethod
+    def prompt_todo_complete(todo_id: int, *, json_mode: bool = False) -> bool:
+        return ForgeCLI.prompt_task_complete(todo_id, json_mode=json_mode)
 
     @staticmethod
     def milestone_start(milestone_id: int):
@@ -1990,35 +2007,79 @@ def main() -> int:
     task_show_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
+    prompt_task_sync_parser = subparsers.add_parser(
+        "prompt-task-sync",
+        help="Bootstrap persistent prompt tasks from a milestone's expanded tasks",
+    )
+    prompt_task_sync_parser.add_argument(
+        "--milestone",
+        type=int,
+        required=True,
+        metavar="ID",
+        help="Milestone id to source tasks from",
+    )
+    prompt_task_sync_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace existing prompt tasks with milestone task projection",
+    )
+    prompt_task_sync_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    prompt_task_list_parser = subparsers.add_parser(
+        "prompt-task-list",
+        help="List persistent prompt tasks and the current active task",
+    )
+    prompt_task_list_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    prompt_task_activate_parser = subparsers.add_parser(
+        "prompt-task-activate",
+        help="Set one active prompt task (enforces single-active invariant)",
+    )
+    prompt_task_activate_parser.add_argument("--id", type=int, required=True, metavar="ID")
+    prompt_task_activate_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    prompt_task_complete_parser = subparsers.add_parser(
+        "prompt-task-complete",
+        help="Explicitly mark a prompt task as completed",
+    )
+    prompt_task_complete_parser.add_argument("--id", type=int, required=True, metavar="ID")
+    prompt_task_complete_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+
+    # Backward-compat aliases (deprecated; keep for transition).
     prompt_todo_sync_parser = subparsers.add_parser(
         "prompt-todo-sync",
-        help="Bootstrap persistent prompt todos from a milestone's expanded tasks",
+        help="DEPRECATED alias for prompt-task-sync",
     )
     prompt_todo_sync_parser.add_argument(
         "--milestone",
         type=int,
         required=True,
         metavar="ID",
-        help="Milestone id to source todos from",
+        help="Milestone id to source tasks from",
     )
     prompt_todo_sync_parser.add_argument(
         "--force",
         action="store_true",
-        help="Replace existing prompt todos with milestone task projection",
+        help="Replace existing prompt tasks with milestone task projection",
     )
     prompt_todo_sync_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     prompt_todo_list_parser = subparsers.add_parser(
         "prompt-todo-list",
-        help="List persistent prompt todos and the current active todo",
+        help="DEPRECATED alias for prompt-task-list",
     )
     prompt_todo_list_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     prompt_todo_activate_parser = subparsers.add_parser(
         "prompt-todo-activate",
-        help="Set one active prompt todo (enforces single-active invariant)",
+        help="DEPRECATED alias for prompt-task-activate",
     )
     prompt_todo_activate_parser.add_argument("--id", type=int, required=True, metavar="ID")
     prompt_todo_activate_parser.add_argument(
@@ -2026,7 +2087,7 @@ def main() -> int:
     )
     prompt_todo_complete_parser = subparsers.add_parser(
         "prompt-todo-complete",
-        help="Explicitly mark a prompt todo as completed",
+        help="DEPRECATED alias for prompt-task-complete",
     )
     prompt_todo_complete_parser.add_argument("--id", type=int, required=True, metavar="ID")
     prompt_todo_complete_parser.add_argument(
@@ -2421,6 +2482,20 @@ def main() -> int:
         ForgeCLI.task_list(args.milestone, json_mode=args.json)
     elif args.command == "task-show":
         ForgeCLI.task_show(args.milestone, args.task, json_mode=args.json)
+    elif args.command == "prompt-task-sync":
+        return (
+            0
+            if ForgeCLI.prompt_task_sync(
+                args.milestone, force=bool(args.force), json_mode=args.json
+            )
+            else 1
+        )
+    elif args.command == "prompt-task-list":
+        ForgeCLI.prompt_task_list(json_mode=args.json)
+    elif args.command == "prompt-task-activate":
+        return 0 if ForgeCLI.prompt_task_activate(args.id, json_mode=args.json) else 1
+    elif args.command == "prompt-task-complete":
+        return 0 if ForgeCLI.prompt_task_complete(args.id, json_mode=args.json) else 1
     elif args.command == "prompt-todo-sync":
         return (
             0
