@@ -2,6 +2,14 @@
 
 Forge is a spec-driven CLI for turning product intent into reviewed plans, code changes, and validation gates with explicit control.
 
+## Design Philosophy
+
+Forge originally explored fully autonomous code generation, but this approach quickly ran into reliability issues.
+
+The current direction (see pivot branch) treats the LLM as a non-deterministic planner rather than an executor. All generated plans are reviewed, validated, and applied through deterministic execution paths.
+
+The goal is not full automation, but making spec-driven development more structured, auditable, and reliable when working with LLMs.
+
 ## Why Forge Exists
 
 Modern LLM coding flows have a reliability gap:
