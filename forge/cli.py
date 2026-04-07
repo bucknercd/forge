@@ -69,6 +69,51 @@ from forge.prompt_task_state import (
 )
 
 
+_DEFAULT_VISIBLE_HELP_COMMANDS = frozenset(
+    {
+        "init",
+        "build",
+        "task-expand",
+        "prompt-task-sync",
+        "prompt-task-list",
+        "prompt-task-activate",
+        "prompt-task-complete",
+        "doctor",
+        "logs",
+        "help",
+    }
+)
+
+
+def _set_subcommand_help_visibility(
+    subparsers_action: argparse._SubParsersAction,
+    *,
+    original_choice_actions: list[argparse.Action],
+    original_help: dict[str, str],
+    original_metavar: str | None,
+    show_all: bool,
+) -> None:
+    if show_all:
+        subparsers_action._choices_actions = list(original_choice_actions)
+        subparsers_action.metavar = original_metavar
+    else:
+        subparsers_action._choices_actions = [
+            action
+            for action in original_choice_actions
+            if str(getattr(action, "dest", "")) in _DEFAULT_VISIBLE_HELP_COMMANDS
+        ]
+        visible_names: list[str] = []
+        for action in subparsers_action._choices_actions:
+            name = str(getattr(action, "dest", ""))
+            if name:
+                visible_names.append(name)
+        if visible_names:
+            subparsers_action.metavar = "{" + ",".join(visible_names) + "}"
+    for choice_action in subparsers_action._choices_actions:
+        name = str(choice_action.dest)
+        choice_action.help = original_help.get(name, "")
+
+
 def _cli_preview_planner_metadata(planner, planner_policy) -> dict:
     """Merge policy LLM fields when the concrete planner is a placeholder (embedded synthesis path)."""
     meta = dict(planner.metadata())
@@ -1802,6 +1847,14 @@ def main() -> int:
 
     # Init command
     subparsers.add_parser("init", help="Bootstrap expected directories and files")
+    help_parser = subparsers.add_parser("help", help="Show CLI help")
+    help_parser.add_argument(
+        "scope",
+        nargs="?",
+        default="default",
+        choices=["default", "all"],
+        help="Use 'all' to show full command list including hidden legacy/internal commands",
+    )
 
     subparsers.add_parser(
         "start",
@@ -2348,9 +2401,37 @@ def main() -> int:
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
 
+    original_subparser_help = {
+        str(choice.dest): str(choice.help)
+        for choice in subparsers._choices_actions
+    }
+    original_subparser_choice_actions = list(subparsers._choices_actions)
+    original_subparser_metavar = subparsers.metavar
+    _set_subcommand_help_visibility(
+        subparsers,
+        original_choice_actions=original_subparser_choice_actions,
+        original_help=original_subparser_help,
+        original_metavar=original_subparser_metavar,
+        show_all=False,
+    )
+
     args = parser.parse_args(argv[1:] if len(argv) > 1 else [])
 
-    if args.command not in {"init", "status", "start", "doctor", None}:
+    if args.command == "help":
+        show_all = getattr(args, "scope", "default") == "all"
+        _set_subcommand_help_visibility(
+            subparsers,
+            original_choice_actions=original_subparser_choice_actions,
+            original_help=original_subparser_help,
+            original_metavar=original_subparser_metavar,
+            show_all=show_all,
+        )
+        parser.print_help()
+        if not show_all:
+            print("\nUse `forge help all` to show hidden legacy/internal commands.")
+        return 0
+
+    if args.command not in {"init", "status", "start", "doctor", "help", None}:
         is_valid, missing = Paths.project_validation()
         if not is_valid:
             print("Current directory is not an initialized Forge project.")

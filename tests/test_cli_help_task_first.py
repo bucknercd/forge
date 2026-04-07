@@ -18,14 +18,60 @@ def test_help_lists_task_first_commands_not_hidden_legacy(capsys, monkeypatch):
         main()
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    assert "task-preview" in out
-    assert "task-apply-plan" in out
+    assert "init" in out
+    assert "build" in out
+    assert "task-expand" in out
+    assert "prompt-task-sync" in out
+    assert "prompt-task-list" in out
+    assert "prompt-task-activate" in out
+    assert "prompt-task-complete" in out
+    assert "doctor" in out
+    assert "logs" in out
+    assert "vertical-slice" not in out
+    assert "task-preview" not in out
+    assert "task-apply-plan" not in out
+    assert "run-next" not in out
+
+
+def test_double_dash_help_is_curated(capsys, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["forge", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "prompt-task-sync" in out
+    assert "doctor" in out
+    assert "logs" in out
+    assert "vertical-slice" not in out
+
+
+def test_help_command_default_is_curated_and_mentions_help_all(capsys, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["forge", "help"])
+    assert main() == 0
+    out = capsys.readouterr().out
+    assert "prompt-task-sync" in out
+    assert "doctor" in out
+    assert "logs" in out
+    assert "vertical-slice" not in out
+    assert "Use `forge help all`" in out
+
+
+def test_help_all_shows_full_list_including_hidden(capsys, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["forge", "help", "all"])
+    assert main() == 0
+    out = capsys.readouterr().out
+    assert "vertical-slice" in out
     assert "run-next" in out
-    assert "milestone-preview" not in out
-    assert "milestone-apply-plan" not in out
-    assert "execute-next" not in out
-    assert "milestone-execute" not in out
-    assert "milestone-retry" not in out
+    assert "task-apply-plan" in out
+
+
+def test_hidden_command_vertical_slice_remains_callable(capsys, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["forge", "vertical-slice", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "vertical-slice" in out
 
 
 def test_deprecated_execute_next_prints_warning(tmp_path, monkeypatch, capsys):
