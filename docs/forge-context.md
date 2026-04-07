@@ -276,18 +276,21 @@ Goal:
 - deterministic synchronization from milestone task files into prompt-task state
 
 Status:
-- in progress or recently completed, depending on branch state
+- complete
 
 ### Phase 3 - Prompt compiler
 Goal:
 - compile a selected task into a Cursor-ready prompt artifact
 
 Status:
-- next major focus
+- complete
 
 ### Phase 4 - Explicit workflow ownership
 Goal:
 - ensure Forge owns state transitions while coding happens outside Forge
+
+Status:
+- TODO
 
 ### Phase 5 - Validation and feedback
 Goal:
