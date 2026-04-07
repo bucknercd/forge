@@ -157,6 +157,215 @@ def list_prompt_tasks() -> list[PromptTask]:
     return list(load_prompt_task_state().tasks)
 
 
+def _next_prompt_task_id(tasks: list[PromptTask]) -> int:
+    max_id = 0
+    for t in tasks:
+        if t.id > max_id:
+            max_id = t.id
+    return max_id + 1
+
+
+def _project_source_tasks(milestone_id: int) -> list[PromptTask]:
+    """
+    Deterministically project source milestone task rows into prompt-task candidates.
+
+    Raises ValueError on malformed source task rows so sync can fail explicitly.
+    """
+    try:
+        source_items = list_tasks(milestone_id)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to load source tasks for milestone {milestone_id}: {exc}"
+        ) from exc
+    out: list[PromptTask] = []
+    seen_source_ids: set[int] = set()
+    for source in source_items:
+        source_id = int(source.id)
+        if source_id <= 0:
+            raise ValueError(
+                f"Malformed source task for milestone {milestone_id}: id must be > 0."
+            )
+        if source_id in seen_source_ids:
+            raise ValueError(
+                f"Malformed source task data for milestone {milestone_id}: duplicate task id {source_id}."
+            )
+        seen_source_ids.add(source_id)
+        out.append(
+            PromptTask(
+                id=0,  # assigned during reconcile
+                title=str(source.title or ""),
+                objective=str(source.objective or ""),
+                status=(
+                    TASK_STATUS_COMPLETED
+                    if str(source.status).strip().lower() == "completed"
+                    else TASK_STATUS_PENDING
+                ),
+                milestone_id=milestone_id,
+                task_id=source_id,
+            )
+        )
+    return out
+
+
+def _reconcile_existing_and_projected_tasks(
+    state: PromptTaskState,
+    milestone_id: int,
+    projected: list[PromptTask],
+    *,
+    force: bool = False,
+) -> tuple[list[PromptTask], list[int]]:
+    """
+    Merge projected source tasks with existing prompt-task state.
+
+    - Match by (milestone_id, task_id) first.
+    - Preserve existing ids and completed history when safe.
+    - Keep orphaned historical rows for this milestone unless force=True.
+    - Return merged tasks plus source-order ids for active-task fallback.
+    """
+    existing_all = list(state.tasks)
+    existing_for_milestone = [t for t in existing_all if t.milestone_id == milestone_id]
+    existing_other = [t for t in existing_all if t.milestone_id != milestone_id]
+
+    by_source_key: dict[int, PromptTask] = {}
+    for t in existing_for_milestone:
+        if t.task_id is None:
+            continue
+        by_source_key.setdefault(int(t.task_id), t)
+
+    out_for_milestone: list[PromptTask] = []
+    source_order_ids: list[int] = []
+    used_existing_ids: set[int] = set()
+
+    next_id = _next_prompt_task_id(existing_all)
+    for candidate in projected:
+        matched = by_source_key.get(int(candidate.task_id or 0))
+        if matched is not None:
+            used_existing_ids.add(matched.id)
+            merged_status = candidate.status
+            if matched.status == TASK_STATUS_COMPLETED:
+                merged_status = TASK_STATUS_COMPLETED
+            elif matched.status == TASK_STATUS_ACTIVE and candidate.status != TASK_STATUS_COMPLETED:
+                merged_status = TASK_STATUS_ACTIVE
+            elif candidate.status != TASK_STATUS_COMPLETED:
+                merged_status = TASK_STATUS_PENDING
+            out_for_milestone.append(
+                PromptTask(
+                    id=matched.id,
+                    title=candidate.title,
+                    objective=candidate.objective,
+                    status=merged_status,
+                    milestone_id=milestone_id,
+                    task_id=candidate.task_id,
+                )
+            )
+            source_order_ids.append(matched.id)
+            continue
+
+        assigned_id = next_id
+        next_id += 1
+        out_for_milestone.append(
+            PromptTask(
+                id=assigned_id,
+                title=candidate.title,
+                objective=candidate.objective,
+                status=candidate.status,
+                milestone_id=milestone_id,
+                task_id=candidate.task_id,
+            )
+        )
+        source_order_ids.append(assigned_id)
+
+    if not force:
+        for old in existing_for_milestone:
+            if old.id in used_existing_ids:
+                continue
+            preserved_status = (
+                TASK_STATUS_COMPLETED
+                if old.status == TASK_STATUS_COMPLETED
+                else TASK_STATUS_PENDING
+            )
+            out_for_milestone.append(
+                PromptTask(
+                    id=old.id,
+                    title=old.title,
+                    objective=old.objective,
+                    status=preserved_status,
+                    milestone_id=old.milestone_id,
+                    task_id=old.task_id,
+                )
+            )
+
+    return existing_other + out_for_milestone, source_order_ids
+
+
+def _enforce_post_reconcile_single_active(
+    tasks: list[PromptTask],
+    *,
+    preferred_active_id: int | None,
+    source_order_ids: list[int],
+) -> PromptTaskState:
+    by_id = {t.id: t for t in tasks}
+    active_id = preferred_active_id
+    if active_id is not None:
+        active_task = by_id.get(active_id)
+        if active_task is None or active_task.status == TASK_STATUS_COMPLETED:
+            active_id = None
+
+    if active_id is None:
+        for tid in source_order_ids:
+            t = by_id.get(tid)
+            if t is not None and t.status == TASK_STATUS_PENDING:
+                active_id = tid
+                break
+
+    if active_id is None:
+        for t in tasks:
+            if t.status == TASK_STATUS_PENDING:
+                active_id = t.id
+                break
+
+    normalized: list[PromptTask] = []
+    for t in tasks:
+        st = t.status
+        if t.id == active_id and t.status != TASK_STATUS_COMPLETED:
+            st = TASK_STATUS_ACTIVE
+        elif st == TASK_STATUS_ACTIVE:
+            st = TASK_STATUS_PENDING
+        normalized.append(
+            PromptTask(
+                id=t.id,
+                title=t.title,
+                objective=t.objective,
+                status=st,
+                milestone_id=t.milestone_id,
+                task_id=t.task_id,
+            )
+        )
+    return _normalize_single_active(
+        PromptTaskState(version=_STATE_VERSION, active_task_id=active_id, tasks=normalized)
+    )
+
+
+def sync_prompt_tasks_from_milestone(
+    milestone_id: int, *, force: bool = False
+) -> PromptTaskState:
+    """
+    Deterministically reconcile prompt-task state from source milestone tasks.
+    """
+    state = load_prompt_task_state()
+    projected = _project_source_tasks(milestone_id)
+    merged_tasks, source_order_ids = _reconcile_existing_and_projected_tasks(
+        state, milestone_id, projected, force=force
+    )
+    next_state = _enforce_post_reconcile_single_active(
+        merged_tasks,
+        preferred_active_id=state.active_task_id,
+        source_order_ids=source_order_ids,
+    )
+    save_prompt_task_state(next_state)
+    return load_prompt_task_state()
+
+
 def set_active_task(task_id: int) -> PromptTaskState:
     state = load_prompt_task_state()
     found = False
@@ -233,29 +442,7 @@ def bootstrap_tasks_from_milestone(milestone_id: int, *, force: bool = False) ->
     state = load_prompt_task_state()
     if state.tasks and not force:
         return state
-    task_items = list_tasks(milestone_id)
-    tasks: list[PromptTask] = []
-    for t in task_items:
-        status = TASK_STATUS_COMPLETED if t.status == "completed" else TASK_STATUS_PENDING
-        tasks.append(
-            PromptTask(
-                id=t.id,
-                title=t.title,
-                objective=t.objective,
-                status=status,
-                milestone_id=milestone_id,
-                task_id=t.id,
-            )
-        )
-    active_id = None
-    for td in tasks:
-        if td.status == TASK_STATUS_PENDING:
-            td.status = TASK_STATUS_ACTIVE
-            active_id = td.id
-            break
-    new_state = PromptTaskState(version=_STATE_VERSION, active_task_id=active_id, tasks=tasks)
-    save_prompt_task_state(new_state)
-    return load_prompt_task_state()
+    return sync_prompt_tasks_from_milestone(milestone_id, force=force)
 
 
 # Legacy aliases (temporary compatibility for pre-task-first internal callers).
@@ -271,4 +458,5 @@ list_prompt_todos = list_prompt_tasks
 set_active_todo = set_active_task
 complete_todo = complete_task
 bootstrap_todos_from_tasks = bootstrap_tasks_from_milestone
+sync_prompt_todos_from_tasks = sync_prompt_tasks_from_milestone
 

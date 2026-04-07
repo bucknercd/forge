@@ -61,11 +61,11 @@ from forge.task_service import (
 )
 from forge.fresh_start import reset_generated_only
 from forge.prompt_task_state import (
-    bootstrap_tasks_from_milestone,
     complete_task,
     list_prompt_tasks,
     load_prompt_task_state,
     set_active_task,
+    sync_prompt_tasks_from_milestone,
 )
 
 
@@ -500,7 +500,14 @@ class ForgeCLI:
 
     @staticmethod
     def prompt_task_sync(milestone_id: int, *, force: bool = False, json_mode: bool = False) -> bool:
-        state = bootstrap_tasks_from_milestone(milestone_id, force=force)
+        try:
+            state = sync_prompt_tasks_from_milestone(milestone_id, force=force)
+        except ValueError as exc:
+            if json_mode:
+                print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+            else:
+                print(str(exc))
+            return False
         payload = {
             "ok": True,
             "milestone_id": milestone_id,
