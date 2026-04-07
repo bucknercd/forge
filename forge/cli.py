@@ -67,6 +67,7 @@ from forge.prompt_task_state import (
     set_active_task,
     sync_prompt_tasks_from_milestone,
 )
+from forge.prompt_compiler import generate_prompt_artifact
 
 
 _DEFAULT_VISIBLE_HELP_COMMANDS = frozenset(
@@ -604,6 +605,34 @@ class ForgeCLI:
                 f"Completed prompt task {task_id}. "
                 f"Active task is now {state.active_task_id if state.active_task_id else '—'}."
             )
+        return True
+
+    @staticmethod
+    def prompt_generate(milestone_id: int, task_id: int, *, json_mode: bool = False) -> bool:
+        try:
+            result = generate_prompt_artifact(milestone_id, task_id)
+        except ValueError as exc:
+            if json_mode:
+                print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+            else:
+                print(str(exc))
+            return False
+
+        payload = {
+            "ok": True,
+            "milestone_id": milestone_id,
+            "task_id": task_id,
+            "prompt_path": result["prompt_path"],
+            "prompt": result["prompt_text"],
+        }
+        if json_mode:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return True
+
+        print(f"Generated prompt for milestone {milestone_id} task {task_id}.")
+        print(f"Prompt artifact: {result['prompt_path']}")
+        print("")
+        print(result["prompt_text"])
         return True
 
     # Backward-compatible aliases (deprecated task terminology migration).
@@ -2111,6 +2140,27 @@ def main() -> int:
     prompt_task_complete_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
+    prompt_generate_parser = subparsers.add_parser(
+        "prompt-generate",
+        help="Generate a Cursor-ready prompt artifact for one task",
+    )
+    prompt_generate_parser.add_argument(
+        "--milestone",
+        type=int,
+        required=True,
+        metavar="ID",
+        help="Milestone id",
+    )
+    prompt_generate_parser.add_argument(
+        "--task",
+        type=int,
+        required=True,
+        metavar="ID",
+        help="Task id",
+    )
+    prompt_generate_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
 
     # Backward-compat aliases (deprecated; keep for transition).
     prompt_todo_sync_parser = subparsers.add_parser(
@@ -2587,6 +2637,16 @@ def main() -> int:
         return 0 if ForgeCLI.prompt_task_activate(args.id, json_mode=args.json) else 1
     elif args.command == "prompt-task-complete":
         return 0 if ForgeCLI.prompt_task_complete(args.id, json_mode=args.json) else 1
+    elif args.command == "prompt-generate":
+        return (
+            0
+            if ForgeCLI.prompt_generate(
+                args.milestone,
+                args.task,
+                json_mode=args.json,
+            )
+            else 1
+        )
     elif args.command == "prompt-todo-sync":
         return (
             0
