@@ -103,6 +103,54 @@ def test_prompt_task_complete_behavior_unchanged(tmp_path, monkeypatch):
     assert row["status"] == "completed"
 
 
+def test_prompt_task_complete_records_provenance(tmp_path, monkeypatch):
+    _seed_prompt_tasks(tmp_path, monkeypatch)
+    monkeypatch.setattr("sys.argv", ["forge", "prompt-task-complete", "--id", "1"])
+    assert main() == 0
+    path = prompt_workflow_history_path()
+    last = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    assert last["event"] == "task_completed"
+    assert last["task_id"] == 1
+    assert last["milestone_id"] == 1
+    assert last["status_before"] == "pending"
+    assert last["status_after"] == "completed"
+    assert last["source"] == "forge_cli"
+
+
+def test_prompt_task_activate_records_provenance(tmp_path, monkeypatch):
+    _seed_prompt_tasks(tmp_path, monkeypatch)
+    monkeypatch.setattr("sys.argv", ["forge", "prompt-task-activate", "--id", "1"])
+    assert main() == 0
+    path = prompt_workflow_history_path()
+    last = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    assert last["event"] == "task_activated"
+    assert last["task_id"] == 1
+    assert last["status_before"] == "pending"
+    assert last["status_after"] == "active"
+
+
+def test_prompt_task_start_then_complete_event_sequence(tmp_path, monkeypatch):
+    _seed_prompt_tasks(tmp_path, monkeypatch)
+    monkeypatch.setattr("sys.argv", ["forge", "prompt-task-start", "--id", "1"])
+    assert main() == 0
+    monkeypatch.setattr("sys.argv", ["forge", "prompt-task-complete", "--id", "1"])
+    assert main() == 0
+    lines = prompt_workflow_history_path().read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line)["event"] for line in lines]
+    assert events[-2:] == ["task_started", "task_completed"]
+
+
+def test_invalid_completion_does_not_append_false_success_event(tmp_path, monkeypatch):
+    _seed_prompt_tasks(tmp_path, monkeypatch)
+    monkeypatch.setattr("sys.argv", ["forge", "prompt-task-complete", "--id", "999"])
+    assert main() == 1
+    path = prompt_workflow_history_path()
+    if not path.exists():
+        return
+    events = [json.loads(line)["event"] for line in path.read_text(encoding="utf-8").splitlines()]
+    assert "task_completed" not in events
+
+
 def test_prompt_generate_behavior_unchanged(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)

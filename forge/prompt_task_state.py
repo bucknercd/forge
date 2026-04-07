@@ -396,8 +396,11 @@ def sync_prompt_tasks_from_milestone(
     return load_prompt_task_state()
 
 
-def set_active_task(task_id: int) -> PromptTaskState:
+def set_active_task(task_id: int, *, record_event: bool = True) -> PromptTaskState:
     state = load_prompt_task_state()
+    before_task = next((t for t in state.tasks if t.id == task_id), None)
+    before_status = before_task.status if before_task is not None else None
+    milestone_id = before_task.milestone_id if before_task is not None else None
     found = False
     out: list[PromptTask] = []
     for t in state.tasks:
@@ -431,7 +434,18 @@ def set_active_task(task_id: int) -> PromptTaskState:
         raise ValueError(f"Unknown task id {task_id}.")
     new_state = PromptTaskState(version=_STATE_VERSION, active_task_id=task_id, tasks=out)
     save_prompt_task_state(new_state)
-    return load_prompt_task_state()
+    loaded = load_prompt_task_state()
+    if record_event:
+        after_task = next((t for t in loaded.tasks if t.id == task_id), None)
+        after_status = after_task.status if after_task is not None else None
+        _append_prompt_workflow_event(
+            event_type="task_activated",
+            task_id=task_id,
+            milestone_id=milestone_id,
+            status_before=before_status,
+            status_after=after_status,
+        )
+    return loaded
 
 
 def start_task(task_id: int) -> PromptTaskState:
@@ -442,7 +456,7 @@ def start_task(task_id: int) -> PromptTaskState:
     before_task = next((t for t in before_state.tasks if t.id == task_id), None)
     before_status = before_task.status if before_task is not None else None
     milestone_id = before_task.milestone_id if before_task is not None else None
-    after_state = set_active_task(task_id)
+    after_state = set_active_task(task_id, record_event=False)
     after_task = next((t for t in after_state.tasks if t.id == task_id), None)
     after_status = after_task.status if after_task is not None else None
     _append_prompt_workflow_event(
@@ -460,6 +474,9 @@ def complete_task(task_id: int) -> PromptTaskState:
     Explicit completion path: task completion only happens via this call/CLI command.
     """
     state = load_prompt_task_state()
+    before_task = next((t for t in state.tasks if t.id == task_id), None)
+    before_status = before_task.status if before_task is not None else None
+    milestone_id = before_task.milestone_id if before_task is not None else None
     found = False
     out: list[PromptTask] = []
     active = state.active_task_id
@@ -483,7 +500,17 @@ def complete_task(task_id: int) -> PromptTaskState:
     if not found:
         raise ValueError(f"Unknown task id {task_id}.")
     save_prompt_task_state(PromptTaskState(version=_STATE_VERSION, active_task_id=active, tasks=out))
-    return load_prompt_task_state()
+    loaded = load_prompt_task_state()
+    after_task = next((t for t in loaded.tasks if t.id == task_id), None)
+    after_status = after_task.status if after_task is not None else None
+    _append_prompt_workflow_event(
+        event_type="task_completed",
+        task_id=task_id,
+        milestone_id=milestone_id,
+        status_before=before_status,
+        status_after=after_status,
+    )
+    return loaded
 
 
 def bootstrap_tasks_from_milestone(milestone_id: int, *, force: bool = False) -> PromptTaskState:
