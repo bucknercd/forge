@@ -290,7 +290,12 @@ Goal:
 - ensure Forge owns state transitions while coding happens outside Forge
 
 Status:
-- TODO
+- in progress
+
+  - explicit task start/handoff added
+  - prompt workflow history file added
+  - completion provenance / fuller lifecycle tracking still pending
+
 
 ### Phase 5 - Validation and feedback
 Goal:

@@ -10,6 +10,7 @@ Phase 1 scope:
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,10 @@ class PromptTaskState:
 
 def task_state_path() -> Path:
     return Paths.SYSTEM_DIR / "prompt_tasks.json"
+
+
+def prompt_workflow_history_path() -> Path:
+    return Paths.SYSTEM_DIR / "prompt_workflow_history.jsonl"
 
 
 def _legacy_todo_state_path() -> Path:
@@ -155,6 +160,31 @@ def save_prompt_task_state(state: PromptTaskState) -> None:
 
 def list_prompt_tasks() -> list[PromptTask]:
     return list(load_prompt_task_state().tasks)
+
+
+def _append_prompt_workflow_event(
+    *,
+    event_type: str,
+    task_id: int,
+    milestone_id: int | None,
+    status_before: str | None,
+    status_after: str | None,
+) -> None:
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    path = prompt_workflow_history_path()
+    if not path.exists():
+        path.touch()
+    payload = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event_type,
+        "task_id": task_id,
+        "milestone_id": milestone_id,
+        "status_before": status_before,
+        "status_after": status_after,
+        "source": "forge_cli",
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _next_prompt_task_id(tasks: list[PromptTask]) -> int:
@@ -404,6 +434,27 @@ def set_active_task(task_id: int) -> PromptTaskState:
     return load_prompt_task_state()
 
 
+def start_task(task_id: int) -> PromptTaskState:
+    """
+    Explicit handoff/start transition for prompt-driven implementation workflow.
+    """
+    before_state = load_prompt_task_state()
+    before_task = next((t for t in before_state.tasks if t.id == task_id), None)
+    before_status = before_task.status if before_task is not None else None
+    milestone_id = before_task.milestone_id if before_task is not None else None
+    after_state = set_active_task(task_id)
+    after_task = next((t for t in after_state.tasks if t.id == task_id), None)
+    after_status = after_task.status if after_task is not None else None
+    _append_prompt_workflow_event(
+        event_type="task_started",
+        task_id=task_id,
+        milestone_id=milestone_id,
+        status_before=before_status,
+        status_after=after_status,
+    )
+    return after_state
+
+
 def complete_task(task_id: int) -> PromptTaskState:
     """
     Explicit completion path: task completion only happens via this call/CLI command.
@@ -456,6 +507,7 @@ load_todo_state = load_prompt_task_state
 save_todo_state = save_prompt_task_state
 list_prompt_todos = list_prompt_tasks
 set_active_todo = set_active_task
+start_todo = start_task
 complete_todo = complete_task
 bootstrap_todos_from_tasks = bootstrap_tasks_from_milestone
 sync_prompt_todos_from_tasks = sync_prompt_tasks_from_milestone

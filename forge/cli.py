@@ -65,6 +65,7 @@ from forge.prompt_task_state import (
     list_prompt_tasks,
     load_prompt_task_state,
     set_active_task,
+    start_task,
     sync_prompt_tasks_from_milestone,
 )
 from forge.prompt_compiler import generate_prompt_artifact
@@ -585,6 +586,26 @@ class ForgeCLI:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
             print(f"Active prompt task set to {state.active_task_id}.")
+        return True
+
+    @staticmethod
+    def prompt_task_start(task_id: int, *, json_mode: bool = False) -> bool:
+        try:
+            state = start_task(task_id)
+        except ValueError as exc:
+            if json_mode:
+                print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+            else:
+                print(str(exc))
+            return False
+        payload = {"ok": True, "started_task_id": task_id, "active_task_id": state.active_task_id}
+        if json_mode:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(
+                f"Started prompt task {task_id} for implementation handoff. "
+                f"Active task is now {state.active_task_id}."
+            )
         return True
 
     @staticmethod
@@ -2140,6 +2161,14 @@ def main() -> int:
     prompt_task_complete_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
+    prompt_task_start_parser = subparsers.add_parser(
+        "prompt-task-start",
+        help="Explicitly start/handoff a prompt task for implementation",
+    )
+    prompt_task_start_parser.add_argument("--id", type=int, required=True, metavar="ID")
+    prompt_task_start_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
     prompt_generate_parser = subparsers.add_parser(
         "prompt-generate",
         help="Generate a Cursor-ready prompt artifact for one task",
@@ -2635,6 +2664,8 @@ def main() -> int:
         ForgeCLI.prompt_task_list(json_mode=args.json)
     elif args.command == "prompt-task-activate":
         return 0 if ForgeCLI.prompt_task_activate(args.id, json_mode=args.json) else 1
+    elif args.command == "prompt-task-start":
+        return 0 if ForgeCLI.prompt_task_start(args.id, json_mode=args.json) else 1
     elif args.command == "prompt-task-complete":
         return 0 if ForgeCLI.prompt_task_complete(args.id, json_mode=args.json) else 1
     elif args.command == "prompt-generate":
