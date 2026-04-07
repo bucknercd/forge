@@ -1,11 +1,10 @@
 # Forge
 
-Forge is a spec-driven, prompt-first development engine for AI-assisted software engineering.
-It turns ideas into structured architecture and milestone drafts, expands them into executable tasks, and prepares Cursor-ready prompts for active tasks while keeping humans in control of design and code review.
+Forge is a **spec-driven, prompt-first workflow engine** for AI-assisted software engineering. It turns ideas into structured specs, milestones, and tasks; compiles **task-scoped, Cursor-ready prompts**; and **tracks explicit workflow state** (sync, start, complete) on disk. Implementation and tests happen **outside Forge**—in Cursor or by hand—while Forge remains the source of truth for planning artifacts and task lifecycle.
 
 ## What Forge Is
 
-Forge is a workflow and state layer for AI-assisted development, not an autonomous coding agent.
+Forge is a workflow and state layer for AI-assisted development, not an autonomous coding agent. It does not replace your editor or assume autonomous code apply; it orchestrates **what to do next** and **when a task is officially started or done**.
 
 It focuses on:
 - explicit design artifacts in `docs/`
@@ -44,44 +43,48 @@ It focuses on the missing middle layer:
 
 ```text
 idea
-  -> draft requirements/architecture/milestones
+  -> draft requirements / architecture / milestones (e.g. forge build)
   -> human review/edit
-  -> milestone -> task expansion
+  -> milestone -> task expansion (.system/tasks/)
   -> optional human task edits
-  -> active task selected
-  -> Forge generates prompt for active task (in progress)
-  -> human reviews code diff
-  -> Forge marks task complete
+  -> prompt-task sync from milestone tasks
+  -> Forge generates a task-scoped prompt artifact (prompt-generate)
+  -> explicit start/handoff for implementation (prompt-task-start)
+  -> human / Cursor implements and tests in the repo
+  -> Forge records completion explicitly (prompt-task-complete)
 ```
+
+Lifecycle transitions are **file-backed** and inspectable (e.g. `.system/prompt_workflow_history.jsonl`).
 
 ### Implemented vs in progress
 
 Implemented:
-- spec and milestone generation flows
-- task expansion and task-first execution model
-- persistent prompt-task state with single active task
-- explicit task activation/completion commands
+- spec and milestone generation flows (`forge build --idea`, `--from-vision`, etc.)
+- task expansion and milestone task files under `.system/tasks/`
+- persistent prompt-task state with single active task (`prompt-task-sync`, `prompt-task-list`)
+- explicit task activation, **start/handoff**, and completion (`prompt-task-activate`, `prompt-task-start`, `prompt-task-complete`)
+- task-scoped prompt generation and artifacts (`prompt-generate` → `.system/prompts/`)
+- append-only **workflow history** for main prompt-task lifecycle events
 
 In progress:
-- first-class prompt compiler from active task to Cursor-ready prompt artifact
-- tighter prompt workflow integration around completion/validation
+- tighter integration between completion, validation, and follow-up prompts
 
 ## Key Concepts
 
 - **Milestone**: planning chunk in `docs/milestones.md`.
 - **Task**: executable unit derived from a milestone, stored in `.system/tasks/m<id>.json`.
 - **Active task**: current prompt-workflow item; exactly one active task.
-- **Prompt**: task-scoped, Cursor-ready prompt context for coding tools (compiler is in progress).
+- **Prompt**: task-scoped, Cursor-ready prompt text persisted under `.system/prompts/` (`prompt-generate`).
 - **State ownership**: Forge updates workflow state; task completion is explicit and command-driven.
 
 ## Current Status
 
-Forge is transitioning from execution-first orchestration to prompt-first workflow ownership.
+Forge’s **primary** story is prompt-first: specs → tasks → prompts → explicit lifecycle. Optional **legacy** execution paths (reviewed plans, apply, gates) remain for teams that need them; they are not the default happy path.
 
-- Task-first terminology and state model are in place.
-- Prompt-task state is persisted under `.system/prompt_tasks.json`.
-- Legacy `prompt-todo-*` aliases remain temporarily for compatibility.
-- Apply/reviewed-plan flows still exist as advanced paths.
+- Prompt-task state: `.system/prompt_tasks.json`
+- Prompt artifacts: `.system/prompts/`
+- Workflow history: `.system/prompt_workflow_history.jsonl`
+- Legacy `prompt-todo-*` CLI aliases remain temporarily for compatibility.
 
 ## Quick Start
 
@@ -124,22 +127,43 @@ export FORGE_OPENAI_API_KEY="sk-..."
 export OPENAI_API_KEY="sk-..."
 ```
 
-Generate draft artifacts:
+Generate draft artifacts (LLM-backed; requires `forge-policy.json` and API credentials as above):
 
 ```bash
 forge build --idea "Internal admin service with role-based access and audit logs"
+# or, with vision in docs/vision.txt:
+forge build --from-vision
 ```
 
-`build` is the preferred high-level entrypoint and currently wraps Forge's existing vertical-slice plumbing.
+`build` materializes specs and milestones and prepares tasks; on this branch it **stops before** reviewed-plan apply and autonomous code generation so you can edit artifacts and drive the prompt workflow explicitly.
 
 Then review/edit:
 - `docs/requirements.md`
 - `docs/architecture.md`
 - `docs/milestones.md`
 
+### Typical pivot workflow (commands in order)
+
+```bash
+forge init
+forge build --idea "Your project idea"
+# or: put vision in docs/vision.txt, then:
+forge build --from-vision
+
+forge task-expand --milestone 1
+forge prompt-task-sync --milestone 1
+forge prompt-task-list
+forge prompt-generate --milestone 1 --task 1
+forge prompt-task-start --id 1
+# implement and test in Cursor or locally
+forge prompt-task-complete --id 1
+```
+
+`init` is once per new project directory; `build` needs `forge-policy.json` and API credentials as above.
+
 ## Task-First Workflow Commands
 
-### Milestone -> task expansion
+### Milestone → tasks
 
 ```bash
 forge task-expand --milestone 1
@@ -147,21 +171,26 @@ forge task-list --milestone 1
 forge task-show --milestone 1 --task 1
 ```
 
-### Prompt-task state (primary pivot UX)
+### Prompt workflow (primary pivot UX)
 
 ```bash
 forge prompt-task-sync --milestone 1
 forge prompt-task-list
-forge prompt-task-activate --id 1
+forge prompt-generate --milestone 1 --task 1
+forge prompt-task-start --id 1
 forge prompt-task-complete --id 1
 ```
 
+Optional: `forge prompt-task-activate --id 1` sets the active task without the explicit “start/handoff” semantics of `prompt-task-start` (both update state; see workflow history for what ran).
+
 Notes:
 - Forge enforces one active prompt task at a time.
-- Completion is explicit (`prompt-task-complete`), not implicit.
+- **Start** (`prompt-task-start`) and **completion** (`prompt-task-complete`) are explicit Forge commands—not inferred from prompt generation or Cursor activity.
 - Deprecated aliases (`prompt-todo-*`) still work temporarily.
 
 ## Legacy / Advanced Execution Paths
+
+**Secondary.** Use these when you need heavier automation; day-to-day pivot work should stay on `build` + task + prompt commands above.
 
 These flows are still supported but are not the primary product story:
 - `task-preview`
@@ -179,6 +208,8 @@ Use them when you need automation-heavy apply/gate orchestration. Prefer `build`
 - `tests/` - Forge test suite
 - `.system/tasks/` - milestone task breakdowns
 - `.system/prompt_tasks.json` - prompt-task workflow state
+- `.system/prompts/` - generated task-scoped prompt artifacts
+- `.system/prompt_workflow_history.jsonl` - append-only prompt-task lifecycle events
 - `.system/reviewed_plans/` - saved reviewed plans (legacy/advanced path)
 - `.forge/runs/` - run event logs and artifacts
 - `forge-policy.json` - planner and policy configuration
