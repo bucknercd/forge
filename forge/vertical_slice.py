@@ -845,11 +845,12 @@ def run_vertical_slice(
     disable_gate_test_cmd: bool,
     gate_test_timeout_seconds: int | None,
     gate_test_output_max_chars: int | None,
+    stop_after_task_prep: bool = False,
     event_bus: object | None = None,
     llm_bundle_artifact_dir: Path | None = None,
 ) -> dict:
     """
-    Run materialize → save reviewed plan → apply with gates.
+    Run materialize → task prep → (optional) save reviewed plan → apply with gates.
     Returns a dict with ok, stages (list), plan_id, etc.
 
     When ``demo`` is False, provide exactly one of ``idea`` (CLI ``--idea``) or
@@ -1129,6 +1130,28 @@ def run_vertical_slice(
         bus.emit(RUN_FAILED, reason=msg, phase="plan")
         bus.emit(RUN_COMPLETED, ok=False)
         return _finalize(stages, ok=False)
+
+    if stop_after_task_prep:
+        stages.append(
+            {
+                "stage": "task_prepare",
+                "ok": True,
+                "milestone_id": milestone_id,
+                "task_id": nt.id,
+                "message": (
+                    f"Prepared tasks for milestone {milestone_id}; stopping before reviewed plan "
+                    "save/apply for pivot build flow."
+                ),
+            }
+        )
+        bus.emit(
+            PHASE_COMPLETED,
+            phase="plan",
+            ok=True,
+            message="Task preparation complete (stopped before apply).",
+        )
+        bus.emit(RUN_COMPLETED, ok=True)
+        return _finalize(stages, ok=True)
 
     task_ir = compile_task_to_ir(nt)
     force_llm_for_impl = (

@@ -1641,6 +1641,7 @@ class ForgeCLI:
         disable_gate_test_cmd: bool = False,
         gate_test_timeout_seconds: int | None = None,
         gate_test_output_max_chars: int | None = None,
+        stop_after_task_prep: bool = False,
         json_mode: bool = False,
         verbose: bool = False,
     ) -> bool:
@@ -1684,6 +1685,7 @@ class ForgeCLI:
             disable_gate_test_cmd=disable_gate_test_cmd,
             gate_test_timeout_seconds=gate_test_timeout_seconds,
             gate_test_output_max_chars=gate_test_output_max_chars,
+            stop_after_task_prep=stop_after_task_prep,
             event_bus=bus,
             llm_bundle_artifact_dir=run_dir,
         )
@@ -2531,6 +2533,7 @@ def main() -> int:
                 disable_gate_test_cmd=args.no_gate_test_cmd,
                 gate_test_timeout_seconds=args.gate_test_timeout_seconds,
                 gate_test_output_max_chars=args.gate_test_output_max_chars,
+                stop_after_task_prep=True,
                 json_mode=args.json,
                 verbose=args.verbose,
             )
