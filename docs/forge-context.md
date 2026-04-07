@@ -290,7 +290,7 @@ Goal:
 - ensure Forge owns state transitions while coding happens outside Forge
 
 Status:
-- in progress
+- complete
 
   - explicit task start/handoff added
   - prompt workflow history file added
@@ -300,6 +300,9 @@ Status:
 ### Phase 5 - Validation and feedback
 Goal:
 - connect explicit completion, validation, and feedback loops without reverting to autonomous code generation as the default path
+
+Status:
+- TODO
 
 ---
 
