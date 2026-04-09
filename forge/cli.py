@@ -69,17 +69,28 @@ from forge.prompt_task_state import (
     sync_prompt_tasks_from_milestone,
 )
 from forge.prompt_compiler import generate_prompt_artifact
+from forge.workflow_ux import (
+    current_focus_milestone_id,
+    format_milestone_workflow_display,
+    infer_milestone_workflow_label,
+    prompt_task_by_milestone_task,
+    recommend_next_command,
+)
 
 
 _DEFAULT_VISIBLE_HELP_COMMANDS = frozenset(
     {
         "init",
         "build",
+        "status",
+        "milestone-list",
+        "milestone-show",
         "task-expand",
+        "task-list",
+        "task-complete",
+        "prompt-generate",
         "prompt-task-sync",
-        "prompt-task-list",
-        "prompt-task-activate",
-        "prompt-task-complete",
+        "prompt-task-start",
         "doctor",
         "logs",
         "help",
@@ -311,7 +322,7 @@ class ForgeCLI:
 
     @staticmethod
     def status():
-        """Show current repository state."""
+        """Show current repository state and pivot workflow snapshot."""
         report = analyze_project_status()
         print("Repository Status:")
         print(f"- Project State: {report['state']}")
@@ -337,6 +348,58 @@ class ForgeCLI:
 
         if report["state"] == "ready":
             print("- Project is minimally ready for Forge workflows.")
+
+        print("")
+        print("Workflow (from prompt tasks + expanded tasks):")
+        if not Paths.MILESTONES_FILE.exists():
+            print("- Milestones file missing; run `forge init` or add docs/milestones.md.")
+        else:
+            try:
+                milestones = MilestoneService.list_milestones()
+            except ValueError as exc:
+                print(f"- Cannot parse milestones: {exc}")
+            else:
+                st = load_prompt_task_state()
+                focus = current_focus_milestone_id()
+                if focus is not None:
+                    fm = MilestoneService.get_milestone(focus)
+                    title = (fm.title if fm else "?")[:80]
+                    wf = format_milestone_workflow_display(focus)
+                    print(f"- Current milestone focus: {focus} — {title}")
+                    print(f"  Workflow: {wf}")
+                else:
+                    print("- Current milestone focus: —")
+                if st.active_task_id is not None:
+                    row = next((t for t in st.tasks if t.id == st.active_task_id), None)
+                    if row:
+                        mloc = row.milestone_id if row.milestone_id is not None else "—"
+                        tloc = row.task_id if row.task_id is not None else "—"
+                        print(
+                            f"- Active task: [prompt id {row.id}] {row.title} "
+                            f"(milestone {mloc}, task {tloc}, status={row.status})"
+                        )
+                    else:
+                        print(f"- Active task id {st.active_task_id} (row missing from state file)")
+                else:
+                    print("- Active task: none")
+                done = sum(1 for t in st.tasks if t.status == "completed")
+                total = len(st.tasks)
+                if total:
+                    print(f"- Prompt tasks overall: {done}/{total} completed")
+                hint = recommend_next_command(focus_mid=focus)
+                if hint:
+                    print(f"- Suggested next: {hint}")
+                if milestones:
+                    print("- Milestones at a glance:")
+                    for m in milestones[:12]:
+                        lbl = format_milestone_workflow_display(m.id)
+                        n = task_count_for_milestone(m.id)
+                        tc = f"{n} expanded task(s)" if n else "no expanded tasks"
+                        print(f"  {m.id}. {m.title[:70]}{'…' if len(m.title) > 70 else ''} | {lbl} | {tc}")
+                    if len(milestones) > 12:
+                        print(f"  … and {len(milestones) - 12} more (see `forge milestone-list`)")
+
+        print("")
 
         # Include runtime milestone state summary when available
         state = ForgeCLI.load_milestone_state()
@@ -396,7 +459,7 @@ class ForgeCLI:
 
     @staticmethod
     def milestone_list():
-        """List milestones parsed from milestones.md (with status and task counts)."""
+        """List milestones parsed from milestones.md (workflow + legacy state + task counts)."""
         if not Paths.MILESTONES_FILE.exists():
             print("Milestones file is missing.")
             return
@@ -417,18 +480,19 @@ class ForgeCLI:
             raw = state.get(str(m.id), {})
             st = normalize_milestone_state_value(raw).get("status", "unknown")
             n_tasks = task_count_for_milestone(m.id)
-            task_part = f" | tasks: {n_tasks}" if n_tasks else " | tasks: —"
+            task_part = f" | expanded tasks: {n_tasks}" if n_tasks else " | expanded tasks: —"
+            wf = format_milestone_workflow_display(m.id)
             summ = (m.summary or "").strip()
             summ_part = f"\n   summary: {summ}" if summ else ""
             print(
-                f"{m.id}. {m.title} | status: {st}{task_part}\n"
+                f"{m.id}. {m.title} | workflow: {wf} | legacy state: {st}{task_part}\n"
                 f"   objective: {m.objective[:120]}{'…' if len(m.objective) > 120 else ''}"
                 f"{summ_part}"
             )
 
     @staticmethod
     def milestone_show(milestone_id: int):
-        """Show a single milestone (parsed fields + task hint)."""
+        """Show a single milestone (parsed fields + workflow + tasks)."""
         if not Paths.MILESTONES_FILE.exists():
             print("Milestones file is missing.")
             return
@@ -437,7 +501,10 @@ class ForgeCLI:
             print("Invalid milestone ID.")
             return
         n = task_count_for_milestone(milestone_id)
+        wf_raw = infer_milestone_workflow_label(milestone_id)
+        wf = format_milestone_workflow_display(milestone_id)
         print(f"Milestone {milestone_id}: {m.title}")
+        print(f"Workflow: {wf}")
         if (m.summary or "").strip():
             print(f"Summary: {m.summary}")
         print(f"Objective: {m.objective}")
@@ -448,13 +515,40 @@ class ForgeCLI:
         print(f"Forge Actions: {len(m.forge_actions)} line(s)")
         print(f"Forge Validation: {len(m.forge_validation)} line(s)")
         if n:
-            print(f"Expanded tasks: {n}")
+            print(f"Expanded tasks (milestone-local ids): {n}")
         else:
             print(
                 f"Expanded tasks: — (run `forge task-expand --milestone {milestone_id}`)"
             )
         if n:
-            print(f"Inspect: `forge task-list --milestone {milestone_id}`")
+            tasks = list_tasks(milestone_id)
+            completed = 0
+            synced = 0
+            for t in tasks:
+                pt = prompt_task_by_milestone_task(milestone_id, t.id)
+                if pt is not None:
+                    synced += 1
+                    if pt.status == "completed":
+                        completed += 1
+            print(
+                f"Task progress (prompt-task layer): {completed}/{len(tasks)} completed "
+                f"({synced}/{len(tasks)} linked to prompt tasks)"
+            )
+            if wf_raw == "not_synced":
+                print(
+                    "Run `forge prompt-task-sync --milestone "
+                    f"{milestone_id}` to link workflow state to these tasks."
+                )
+            print("Tasks:")
+            for t in tasks:
+                pt = prompt_task_by_milestone_task(milestone_id, t.id)
+                ps = pt.status if pt else "— (not synced)"
+                pid = f"prompt id {pt.id}" if pt else "—"
+                print(f"  [{t.id}] {t.title}  |  {pid}  |  {ps}")
+            print(
+                f"More detail: `forge task-list --milestone {milestone_id}` / "
+                f"`forge task-show --milestone {milestone_id} --task <id>`"
+            )
 
     @staticmethod
     def task_expand(milestone_id: int, *, force: bool = False, json_mode: bool = False) -> bool:
@@ -470,7 +564,14 @@ class ForgeCLI:
     def task_list(milestone_id: int, json_mode: bool = False) -> None:
         tasks = list_tasks(milestone_id)
         if json_mode:
-            print(json.dumps([asdict(t) for t in tasks], indent=2, sort_keys=True))
+            rows = []
+            for t in tasks:
+                d = asdict(t)
+                pt = prompt_task_by_milestone_task(milestone_id, t.id)
+                d["prompt_task_id"] = pt.id if pt else None
+                d["workflow_status"] = pt.status if pt else None
+                rows.append(d)
+            print(json.dumps(rows, indent=2, sort_keys=True))
             return
         if not tasks:
             print(
@@ -478,7 +579,7 @@ class ForgeCLI:
                 f"Run `forge task-expand --milestone {milestone_id}`."
             )
             return
-        print(f"Tasks for milestone {milestone_id}:")
+        print(f"Tasks for milestone {milestone_id} (expanded under .system/tasks/):")
         for t in tasks:
             deps_s = (
                 ", ".join(str(d) for d in t.depends_on) if t.depends_on else "—"
@@ -486,7 +587,13 @@ class ForgeCLI:
             obj = t.objective.replace("\n", " ")
             if len(obj) > 100:
                 obj = obj[:97] + "…"
+            pt = prompt_task_by_milestone_task(milestone_id, t.id)
+            if pt:
+                wf = f"prompt id {pt.id}, {pt.status}"
+            else:
+                wf = "not linked (run prompt-task-sync)"
             print(f"  [{t.id}] {t.title}")
+            print(f"      workflow: {wf}")
             print(f"      objective: {obj or '—'}")
             print(f"      depends_on: {deps_s}")
 
@@ -624,6 +731,93 @@ class ForgeCLI:
         else:
             print(
                 f"Completed prompt task {task_id}. "
+                f"Active task is now {state.active_task_id if state.active_task_id else '—'}."
+            )
+        return True
+
+    @staticmethod
+    def task_complete(*, json_mode: bool = False) -> bool:
+        """Complete the single active prompt task; friendly entrypoint over prompt-task-complete."""
+        st = load_prompt_task_state()
+        aid = st.active_task_id
+        if aid is None:
+            pending = [t for t in st.tasks if t.status == "pending"]
+            if json_mode:
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "no_active_task",
+                            "pending_count": len(pending),
+                            "hint": "Run `forge prompt-task-start --id <id>` then retry, "
+                            "or `forge prompt-task-complete --id <id>` for a specific task.",
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print("No active task to complete.")
+                if pending:
+                    ids = ", ".join(str(t.id) for t in pending[:8])
+                    more = " …" if len(pending) > 8 else ""
+                    print(
+                        f"There are {len(pending)} pending task(s). Start one with "
+                        f"`forge prompt-task-start --id <id>` (pending prompt ids: {ids}{more}), "
+                        "or complete a specific id with `forge prompt-task-complete --id <id>`."
+                    )
+                else:
+                    print(
+                        "No pending prompt tasks in state. Run `forge prompt-task-sync --milestone <id>` "
+                        "after `forge task-expand`, then `forge status`."
+                    )
+            return False
+        row = next((t for t in st.tasks if t.id == aid), None)
+        if row is None:
+            if json_mode:
+                print(
+                    json.dumps(
+                        {"ok": False, "error": f"active_task_id {aid} not found in task list"},
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(f"Internal state error: active task id {aid} not found.")
+            return False
+        try:
+            state = complete_task(aid)
+        except ValueError as exc:
+            if json_mode:
+                print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+            else:
+                print(str(exc))
+            return False
+        mid = row.milestone_id if row.milestone_id is not None else None
+        mt = row.task_id if row.task_id is not None else None
+        if json_mode:
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "completed_prompt_task_id": aid,
+                        "milestone_id": mid,
+                        "milestone_task_id": mt,
+                        "title": row.title,
+                        "active_task_id": state.active_task_id,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            m_s = str(mid) if mid is not None else "—"
+            t_s = str(mt) if mt is not None else "—"
+            print(
+                f"Completed: {row.title!r} "
+                f"(prompt task id {aid}, milestone {m_s}, milestone-local task {t_s})."
+            )
+            print(
                 f"Active task is now {state.active_task_id if state.active_task_id else '—'}."
             )
         return True
@@ -2007,17 +2201,37 @@ def main() -> int:
     )
 
     # Status command
-    subparsers.add_parser("status", help="Show current repository state")
+    subparsers.add_parser(
+        "status",
+        help="Where am I? Repository health + pivot workflow (milestones, active task, hint)",
+    )
 
     # Design commands
     subparsers.add_parser("design-show", help="Show a summary of the current design artifacts")
 
     # Milestone roadmap (not executed directly)
-    subparsers.add_parser("milestone-list", help="List milestones (roadmap)")
-    milestone_show_parser = subparsers.add_parser(
-        "milestone-show", help="Show one milestone from the roadmap"
+    subparsers.add_parser(
+        "milestone-list",
+        help="List milestones with workflow status (from prompt tasks + expanded tasks)",
     )
-    milestone_show_parser.add_argument("id", type=int, help="Milestone ID")
+    milestone_show_parser = subparsers.add_parser(
+        "milestone-show",
+        help="Show one milestone: roadmap fields, workflow status, and task list",
+    )
+    milestone_show_parser.add_argument(
+        "id",
+        nargs="?",
+        type=int,
+        default=None,
+        help="Milestone id (positional)",
+    )
+    milestone_show_parser.add_argument(
+        "--milestone",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Milestone id (same as positional id)",
+    )
 
     # Run history command
     run_history_parser = subparsers.add_parser(
@@ -2087,7 +2301,8 @@ def main() -> int:
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     task_list_parser = subparsers.add_parser(
-        "task-list", help="List tasks for a milestone"
+        "task-list",
+        help="List expanded tasks for a milestone (with prompt-task workflow link when synced)",
     )
     task_list_parser.add_argument(
         "--milestone",
@@ -2097,6 +2312,13 @@ def main() -> int:
         help="Milestone id",
     )
     task_list_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON output"
+    )
+    task_complete_parser = subparsers.add_parser(
+        "task-complete",
+        help="Complete the single active workflow task (.system/prompt_tasks.json)",
+    )
+    task_complete_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     task_show_parser = subparsers.add_parser(
@@ -2121,7 +2343,7 @@ def main() -> int:
     )
     prompt_task_sync_parser = subparsers.add_parser(
         "prompt-task-sync",
-        help="Bootstrap persistent prompt tasks from a milestone's expanded tasks",
+        help="Advanced: copy expanded tasks into prompt-task state (needed before prompt-start/complete)",
     )
     prompt_task_sync_parser.add_argument(
         "--milestone",
@@ -2140,14 +2362,14 @@ def main() -> int:
     )
     prompt_task_list_parser = subparsers.add_parser(
         "prompt-task-list",
-        help="List persistent prompt tasks and the current active task",
+        help="Advanced: list raw prompt-task rows (see also: forge status)",
     )
     prompt_task_list_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON output"
     )
     prompt_task_activate_parser = subparsers.add_parser(
         "prompt-task-activate",
-        help="Set one active prompt task (enforces single-active invariant)",
+        help="Advanced: set active prompt task without start/handoff event",
     )
     prompt_task_activate_parser.add_argument("--id", type=int, required=True, metavar="ID")
     prompt_task_activate_parser.add_argument(
@@ -2155,7 +2377,7 @@ def main() -> int:
     )
     prompt_task_complete_parser = subparsers.add_parser(
         "prompt-task-complete",
-        help="Explicitly mark a prompt task as completed",
+        help="Advanced: mark a specific prompt task id completed (prefer forge task-complete when active)",
     )
     prompt_task_complete_parser.add_argument("--id", type=int, required=True, metavar="ID")
     prompt_task_complete_parser.add_argument(
@@ -2163,7 +2385,7 @@ def main() -> int:
     )
     prompt_task_start_parser = subparsers.add_parser(
         "prompt-task-start",
-        help="Explicitly start/handoff a prompt task for implementation",
+        help="Mark a prompt task started / hand off for implementation (logs workflow history)",
     )
     prompt_task_start_parser.add_argument("--id", type=int, required=True, metavar="ID")
     prompt_task_start_parser.add_argument(
@@ -2625,7 +2847,15 @@ def main() -> int:
     elif args.command == "milestone-list":
         ForgeCLI.milestone_list()
     elif args.command == "milestone-show":
-        ForgeCLI.milestone_show(args.id)
+        mid = args.milestone if args.milestone is not None else args.id
+        if mid is None:
+            print(
+                "forge milestone-show: pass a milestone id, e.g. `forge milestone-show 1` "
+                "or `forge milestone-show --milestone 1`.",
+                file=sys.stderr,
+            )
+            return 2
+        ForgeCLI.milestone_show(mid)
     elif args.command == "run-history":
         ForgeCLI.run_history(limit=args.limit)
     elif args.command == "milestone-next":
@@ -2650,6 +2880,8 @@ def main() -> int:
         )
     elif args.command == "task-list":
         ForgeCLI.task_list(args.milestone, json_mode=args.json)
+    elif args.command == "task-complete":
+        return 0 if ForgeCLI.task_complete(json_mode=args.json) else 1
     elif args.command == "task-show":
         ForgeCLI.task_show(args.milestone, args.task, json_mode=args.json)
     elif args.command == "prompt-task-sync":

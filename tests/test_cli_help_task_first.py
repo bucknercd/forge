@@ -20,13 +20,20 @@ def test_help_lists_task_first_commands_not_hidden_legacy(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "init" in out
     assert "build" in out
+    assert "status" in out
+    assert "milestone-list" in out
+    assert "milestone-show" in out
     assert "task-expand" in out
+    assert "task-list" in out
+    assert "task-complete" in out
+    assert "prompt-generate" in out
     assert "prompt-task-sync" in out
-    assert "prompt-task-list" in out
-    assert "prompt-task-activate" in out
-    assert "prompt-task-complete" in out
+    assert "prompt-task-start" in out
     assert "doctor" in out
     assert "logs" in out
+    assert "prompt-task-list" not in out
+    assert "prompt-task-activate" not in out
+    assert "prompt-task-complete" not in out
     assert "vertical-slice" not in out
     assert "task-preview" not in out
     assert "task-apply-plan" not in out
@@ -39,6 +46,7 @@ def test_double_dash_help_is_curated(capsys, monkeypatch):
         main()
     assert exc.value.code == 0
     out = capsys.readouterr().out
+    assert "task-complete" in out
     assert "prompt-task-sync" in out
     assert "doctor" in out
     assert "logs" in out
@@ -49,6 +57,7 @@ def test_help_command_default_is_curated_and_mentions_help_all(capsys, monkeypat
     monkeypatch.setattr("sys.argv", ["forge", "help"])
     assert main() == 0
     out = capsys.readouterr().out
+    assert "status" in out
     assert "prompt-task-sync" in out
     assert "doctor" in out
     assert "logs" in out
@@ -63,6 +72,7 @@ def test_help_all_shows_full_list_including_hidden(capsys, monkeypatch):
     assert "vertical-slice" in out
     assert "run-next" in out
     assert "task-apply-plan" in out
+    assert "prompt-task-complete" in out
 
 
 def test_hidden_command_vertical_slice_remains_callable(capsys, monkeypatch):
