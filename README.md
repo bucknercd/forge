@@ -45,13 +45,13 @@ It focuses on the missing middle layer:
 idea
   -> draft requirements / architecture / milestones (e.g. forge build)
   -> human review/edit
-  -> milestone -> task expansion (.system/tasks/)
+  -> inspect with forge status / milestone-list / milestone-show
+  -> milestone -> task expansion (forge task-expand → .system/tasks/)
   -> optional human task edits
-  -> prompt-task sync from milestone tasks
-  -> Forge generates a task-scoped prompt artifact (prompt-generate)
-  -> explicit start/handoff for implementation (prompt-task-start)
+  -> link workflow state and start a task (see Advanced: prompt-task-sync / prompt-task-start)
+  -> Forge generates a task-scoped prompt artifact (forge prompt-generate)
   -> human / Cursor implements and tests in the repo
-  -> Forge records completion explicitly (prompt-task-complete)
+  -> Forge records completion explicitly (forge task-complete, or prompt-task-complete --id)
 ```
 
 Lifecycle transitions are **file-backed** and inspectable (e.g. `.system/prompt_workflow_history.jsonl`).
@@ -60,6 +60,7 @@ Lifecycle transitions are **file-backed** and inspectable (e.g. `.system/prompt_
 
 Implemented:
 - spec and milestone generation flows (`forge build --idea`, `--from-vision`, etc.)
+- **user-facing workflow UX**: `forge doctor`, `forge status`, `forge milestone-list`, `forge milestone-show`, `forge task-complete`
 - task expansion and milestone task files under `.system/tasks/`
 - persistent prompt-task state with single active task (`prompt-task-sync`, `prompt-task-list`)
 - explicit task activation, **start/handoff**, and completion (`prompt-task-activate`, `prompt-task-start`, `prompt-task-complete`)
@@ -88,6 +89,8 @@ Forge’s **primary** story is prompt-first: specs → tasks → prompts → exp
 
 ## Quick Start
 
+Forge is designed to be **easy to start**, **easy to inspect** (`forge status`), and **easy to pick up the next day**—the CLI tells you the suggested next step when it can.
+
 ### Install
 
 ```bash
@@ -105,7 +108,23 @@ mkdir my-project && cd my-project
 forge init
 ```
 
-### Main happy path: build specs/milestones from an idea (LLM-backed)
+### First-run workflow (recommended)
+
+```bash
+forge init
+forge doctor
+forge build --from-vision
+forge status
+forge milestone-list
+forge milestone-show --milestone 1
+```
+
+- **`forge doctor`** checks project layout, `forge-policy.json`, and (when relevant) LLM environment variables—use it after `init` or when something looks wrong.
+- **`forge status`** summarizes where you are: milestone focus, active task (if any), overall task progress, and a **suggested next command** when possible.
+
+For **`forge build --from-vision`**, put your product vision in `docs/vision.txt` first. With **`forge build --idea "..."`**, you can skip a separate vision file. Both paths need LLM policy and credentials (below).
+
+### LLM policy and credentials (for `forge build`)
 
 Create `forge-policy.json`:
 
@@ -127,7 +146,7 @@ export FORGE_OPENAI_API_KEY="sk-..."
 export OPENAI_API_KEY="sk-..."
 ```
 
-Generate draft artifacts (LLM-backed; requires `forge-policy.json` and API credentials as above):
+Then:
 
 ```bash
 forge build --idea "Internal admin service with role-based access and audit logs"
@@ -135,71 +154,94 @@ forge build --idea "Internal admin service with role-based access and audit logs
 forge build --from-vision
 ```
 
-`build` materializes specs and milestones and prepares tasks; on this branch it **stops before** reviewed-plan apply and autonomous code generation so you can edit artifacts and drive the prompt workflow explicitly.
+`build` materializes specs and milestones; on this branch it **stops before** reviewed-plan apply and autonomous code generation so you can edit artifacts and drive the workflow explicitly.
 
-Then review/edit:
+Review/edit:
 - `docs/requirements.md`
 - `docs/architecture.md`
 - `docs/milestones.md`
 
-### Typical pivot workflow (commands in order)
-
-```bash
-forge init
-forge build --idea "Your project idea"
-# or: put vision in docs/vision.txt, then:
-forge build --from-vision
-
-forge task-expand --milestone 1
-forge prompt-task-sync --milestone 1
-forge prompt-task-list
-forge prompt-generate --milestone 1 --task 1
-forge prompt-task-start --id 1
-# implement and test in Cursor or locally
-forge prompt-task-complete --id 1
-```
-
-`init` is once per new project directory; `build` needs `forge-policy.json` and API credentials as above.
-
-## Task-First Workflow Commands
-
-### Milestone → tasks
+### First milestone: expand tasks and inspect
 
 ```bash
 forge task-expand --milestone 1
 forge task-list --milestone 1
-forge task-show --milestone 1 --task 1
+forge status
 ```
 
-### Prompt workflow (primary pivot UX)
+The first time you work tasks for a milestone, `forge status` will usually point you at **linking** expanded tasks into workflow state and **starting** one task (see **Advanced / compatibility: prompt-task layer**). After that, day-to-day work is mostly **`status` → implement in Cursor → `task-complete`**.
+
+## Day-to-day workflow
+
+Normal loop:
+
+> **`status`** → inspect milestones/tasks → **expand** when needed → work in **Cursor** (or locally) → **`task-complete`** → repeat.
+
+Example session:
 
 ```bash
-forge prompt-task-sync --milestone 1
-forge prompt-task-list
-forge prompt-generate --milestone 1 --task 1
-forge prompt-task-start --id 1
-forge prompt-task-complete --id 1
+forge status
+forge task-complete
+forge milestone-list
+forge task-expand --milestone 3
+forge task-list --milestone 3
+forge status
 ```
 
-Optional: `forge prompt-task-activate --id 1` sets the active task without the explicit “start/handoff” semantics of `prompt-task-start` (both update state; see workflow history for what ran).
+When you need a compiled prompt for the editor:
 
-Notes:
-- Forge enforces one active prompt task at a time.
-- **Start** (`prompt-task-start`) and **completion** (`prompt-task-complete`) are explicit Forge commands—not inferred from prompt generation or Cursor activity.
-- Deprecated aliases (`prompt-todo-*`) still work temporarily.
+```bash
+forge prompt-generate --milestone 3 --task 1
+```
 
-## Legacy / Advanced Execution Paths
+If **`forge task-complete`** reports **no active task**, run **`forge status`** and follow the hint—typically you need **`forge prompt-task-sync`** and **`forge prompt-task-start`** once per milestone (documented under Advanced). To complete a specific workflow row without using the active task, use **`forge prompt-task-complete --id <id>`**.
 
-**Secondary.** Use these when you need heavier automation; day-to-day pivot work should stay on `build` + task + prompt commands above.
+## Primary commands (day-to-day)
 
-These flows are still supported but are not the primary product story:
+| Command | Purpose |
+|--------|---------|
+| `forge doctor` | Validate layout, policy, and environment after setup or when debugging. |
+| `forge build` | Generate/update vision, requirements, architecture, milestones (LLM or demo paths). |
+| `forge status` | **Where am I?** Milestone focus, active task, progress, suggested next step. |
+| `forge milestone-list` | All milestones with **workflow** status (derived from tasks + prompt-task state). |
+| `forge milestone-show --milestone N` | One milestone: fields, workflow status, task table. |
+| `forge task-expand --milestone N` | Create/refresh `.system/tasks/` from `docs/milestones.md`. |
+| `forge task-list --milestone N` | List expanded tasks (with workflow link when synced). |
+| `forge task-show --milestone N --task K` | Full detail for one expanded task. |
+| `forge task-complete` | Complete the **active** workflow task (friendly entrypoint). |
+| `forge prompt-generate --milestone N --task K` | Write a task-scoped prompt under `.system/prompts/`. |
+
+See also **`forge logs`** for recent run history under `.forge/runs/`.
+
+Use **`forge help`** for a short curated command list; **`forge help all`** lists legacy and automation commands.
+
+## Advanced / compatibility: prompt-task layer
+
+These commands operate on the same on-disk workflow state as `task-complete`; they are **lower-level** and useful for automation or when you need an explicit ID.
+
+| Command | Purpose |
+|--------|---------|
+| `forge prompt-task-sync --milestone N` | Copy expanded tasks into `.system/prompt_tasks.json`. |
+| `forge prompt-task-start --id ID` | Hand off / start a task (logs workflow history). |
+| `forge prompt-task-complete --id ID` | Complete a specific prompt-task id. |
+| `forge prompt-task-list` | Raw list of prompt-task rows and active id. |
+| `forge prompt-task-activate --id ID` | Set active task without the same handoff semantics as `prompt-task-start`. |
+
+Deprecated aliases (`prompt-todo-*`) still work temporarily.
+
+Forge enforces **one active task** at a time. **Start** and **completion** are never inferred from edits in the repo or from running `prompt-generate` alone.
+
+## Legacy / advanced execution paths
+
+**Secondary.** Heavier automation and older orchestration—not the default pivot loop.
+
 - `task-preview`
 - `task-apply-plan`
 - `run-next`
 - `workflow-guarded`
 - `vertical-slice`
 
-Use them when you need automation-heavy apply/gate orchestration. Prefer `build` + task-first prompt workflow for day-to-day development loops.
+Use these when you need apply/gate automation. Prefer **`build` + `status` + milestone/task commands + `task-complete`** for everyday work.
 
 ## Project Structure
 
