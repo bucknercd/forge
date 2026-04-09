@@ -96,6 +96,24 @@ def test_single_active_invariant_after_sync(tmp_path, monkeypatch):
 def test_completed_tasks_preserved_across_reconcile(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.MILESTONES_FILE.write_text(
+        "# Milestones\n\n"
+        "## Milestone 1: M\n"
+        "- **Objective**: O\n"
+        "- **Scope**: S\n"
+        "- **Validation**: V\n"
+        "\n"
+        "Status: not started\n"
+        "\n"
+        "<!-- FORGE:STATUS START -->\n"
+        "\n"
+        "* [ ] Task 1 title\n"
+        "* [ ] Task 2 title\n"
+        "\n"
+        "<!-- FORGE:STATUS END -->\n",
+        encoding="utf-8",
+    )
     save_tasks(1, [_mk_source_task(1), _mk_source_task(2)])
     first = sync_prompt_tasks_from_milestone(1)
     t1_id = next(t.id for t in first.tasks if t.task_id == 1)

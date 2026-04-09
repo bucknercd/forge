@@ -13,10 +13,30 @@ from forge.prompt_task_state import (
 )
 
 
+def _managed_milestone1_markdown() -> str:
+    return (
+        "# Milestones\n\n"
+        "## Milestone 1: Project Setup\n"
+        "- **Objective**: Establish the initial project structure.\n"
+        "- **Scope**: Bootstrap docs, runtime state, and baseline workflows.\n"
+        "- **Validation**: Confirm core commands run successfully.\n"
+        "\n"
+        "Status: not started\n"
+        "\n"
+        "<!-- FORGE:STATUS START -->\n"
+        "\n"
+        "* [ ] Task one\n"
+        "* [ ] Task two\n"
+        "\n"
+        "<!-- FORGE:STATUS END -->\n"
+    )
+
+
 def _seed_prompt_tasks(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)
     Paths.initialize_project()
+    Paths.MILESTONES_FILE.write_text(_managed_milestone1_markdown(), encoding="utf-8")
     save_prompt_task_state(
         PromptTaskState(
             version=1,

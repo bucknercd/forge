@@ -15,6 +15,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from forge.milestone_status_md import (
+    MilestoneStatusSyncError,
+    sync_milestones_md_for_completed_prompt_task,
+)
 from forge.paths import Paths
 from forge.task_service import list_tasks
 
@@ -510,6 +514,15 @@ def complete_task(task_id: int) -> PromptTaskState:
         status_before=before_status,
         status_after=after_status,
     )
+    if after_task is not None:
+        try:
+            sync_milestones_md_for_completed_prompt_task(
+                milestone_id=after_task.milestone_id,
+                milestone_task_id=after_task.task_id,
+                task_title=after_task.title,
+            )
+        except MilestoneStatusSyncError as exc:
+            raise ValueError(str(exc)) from exc
     return loaded
 
 
