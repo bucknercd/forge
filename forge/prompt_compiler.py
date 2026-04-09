@@ -34,8 +34,8 @@ def compile_task_prompt(milestone_id: int, task_id: int) -> str:
     sections: list[str] = [
         "You are implementing one Forge task in a spec-driven workflow.",
         "",
-        "## Project Context",
-        "- Read these files first from the repository:",
+        "## Read First",
+        "From this repository, read before editing:",
         "- docs/vision.txt",
         "- docs/requirements.md",
         "- docs/architecture.md",
@@ -55,25 +55,43 @@ def compile_task_prompt(milestone_id: int, task_id: int) -> str:
         f"- Depends on: {depends_on}",
         f"- Status in task file: {task.status}",
     ]
-    if task.files_allowed:
-        sections.append(f"- File hints: {task.files_allowed}")
     if (task.validation or "").strip():
         sections.append(f"- Validation criteria: {task.validation}")
     if (task.done_when or "").strip():
         sections.append(f"- Done criteria: {task.done_when}")
 
+    if (task.files_allowed or "").strip():
+        sections.extend(
+            [
+                "",
+                "## Preferred Files",
+                "Suggested places to inspect or edit first (guidance only; not exhaustive or exclusive):",
+                f"- {task.files_allowed.strip()}",
+            ]
+        )
+
     sections.extend(
         [
             "",
-            "## Implementation Instructions",
-            "- Implement this task in the repository codebase.",
-            "- Keep edits aligned with the milestone scope and task objective.",
-            "- Run relevant tests/checks for changed behavior and include outcomes.",
+            "## Implementation Constraints",
+            "- Solve only the task described above.",
+            "- Keep the blast radius small.",
+            "- Prefer editing existing files over adding new ones.",
+            "- Do not introduce new abstractions unless required by this task.",
+            "- Do not refactor unrelated code or do incidental cleanup outside this task.",
+            "- Do not redesign the architecture.",
+            "- Avoid speculative future-proofing.",
+            "- Preserve existing naming and structure unless this task explicitly requires otherwise.",
+            "- Add only the minimum tests needed for the changed behavior.",
+            "- Stop once the task requirements are satisfied.",
+            "",
+            "## Forge Workflow",
             "- Do not mutate Forge workflow state files directly.",
             "- Forge remains the source of truth for workflow state transitions.",
             "- Task completion is explicit in Forge; do not assume completion.",
             "",
-            "Return a concise implementation summary and test results with your diff.",
+            "## Return",
+            "Return a concise summary of changes, tests run, and any assumptions.",
             "",
         ]
     )
