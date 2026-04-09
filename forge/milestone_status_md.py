@@ -1,9 +1,12 @@
 """
 Narrow sync from explicit prompt-task completion to docs/milestones.md.
 
-Only the milestone ``Status:`` line and checkbox lines inside the managed
-``<!-- FORGE:STATUS START -->`` / ``<!-- FORGE:STATUS END -->`` block are
-modified. All other bytes are preserved (line-based reconstruction).
+If a managed ``<!-- FORGE:STATUS START -->`` / ``END`` block already exists,
+only that block and the section ``Status:`` line are updated.
+
+If the block is missing (typical for LLM-generated milestones), the first sync
+injects a minimal block after the ``**Validation**:`` line, built from current
+prompt-task state for that milestone.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ STATUS_COMPLETED = "completed"
 _MILESTONE_HEADING_RE = re.compile(r"^##\s+Milestone\b")
 _CHECKBOX_RE = re.compile(r"^(\s*)(\*|\-)(\s+)\[([ xX])\](\s*)(.*)$")
 _STATUS_RE = re.compile(r"^Status:\s*.*$")
+_VALIDATION_LINE_RE = re.compile(r"\*\*Validation\*\*:")
 
 
 class MilestoneStatusSyncError(ValueError):
@@ -199,6 +203,65 @@ def _derive_status(checked: int, total: int) -> str:
     return STATUS_IN_PROGRESS
 
 
+def _prompt_task_rows_for_milestone(milestone_id: int) -> list[tuple[int | None, str, bool]]:
+    """(milestone_task_id, title, is_completed) sorted for stable checkbox order."""
+    from forge.prompt_task_state import TASK_STATUS_COMPLETED, load_prompt_task_state
+
+    state = load_prompt_task_state()
+    rows: list[tuple[int, int | None, str, bool]] = []
+    for i, t in enumerate(state.tasks):
+        if t.milestone_id != milestone_id:
+            continue
+        done = t.status == TASK_STATUS_COMPLETED
+        rows.append((i, t.task_id, t.title or "", done))
+    rows.sort(key=lambda r: (r[1] is None, r[1] if r[1] is not None else 0, r[0]))
+    return [(tid, title, done) for _i, tid, title, done in rows]
+
+
+def _find_insertion_index_after_validation(lines: list[str], sec_start: int, sec_end: int) -> int:
+    """Insert after the milestone's Validation bullet, else at end of section (before next ##)."""
+    for i in range(sec_start + 1, sec_end):
+        if _VALIDATION_LINE_RE.search(lines[i]):
+            return i + 1
+    return sec_end
+
+
+def inject_managed_milestone_status_block(content: str, milestone_id: int) -> str:
+    """
+    Append ``Status:`` + FORGE checkbox block to a milestone section that has none yet.
+
+    Checkbox rows and checks reflect current ``prompt_tasks.json`` for ``milestone_id``.
+    """
+    lines = content.split("\n")
+    sec_start, sec_end = _section_bounds(lines, milestone_id)
+    if milestone_section_has_managed_block(lines, milestone_id):
+        raise MilestoneStatusSyncError(
+            f"Milestone {milestone_id}: managed status block already exists; use update path."
+        )
+    task_rows = _prompt_task_rows_for_milestone(milestone_id)
+    if not task_rows:
+        raise MilestoneStatusSyncError(
+            f"Milestone {milestone_id}: no prompt tasks in state; cannot inject status block."
+        )
+    checked = sum(1 for _, _, done in task_rows if done)
+    total = len(task_rows)
+    status = _derive_status(checked, total)
+    insert_at = _find_insertion_index_after_validation(lines, sec_start, sec_end)
+    block_lines = [
+        "",
+        f"Status: {status}",
+        "",
+        FORGE_STATUS_START,
+        "",
+    ]
+    for _tid, title, done in task_rows:
+        mark = "x" if done else " "
+        block_lines.append(f"* [{mark}] {title}")
+    block_lines.extend(["", FORGE_STATUS_END, ""])
+    new_lines = lines[:insert_at] + block_lines + lines[insert_at:]
+    return "\n".join(new_lines)
+
+
 def _set_checkbox_checked(line: str) -> str:
     m = _CHECKBOX_RE.match(line)
     if not m:
@@ -263,14 +326,16 @@ def sync_milestones_md_for_completed_prompt_task(
         )
     raw = path.read_text(encoding="utf-8")
     lines = raw.split("\n")
-    if not milestone_section_has_managed_block(lines, int(milestone_id)):
-        return
-    new = update_milestones_md_for_task_completion(
-        raw,
-        milestone_id=int(milestone_id),
-        milestone_task_id=int(milestone_task_id) if milestone_task_id is not None else None,
-        task_title=task_title,
-    )
+    mid = int(milestone_id)
+    if milestone_section_has_managed_block(lines, mid):
+        new = update_milestones_md_for_task_completion(
+            raw,
+            milestone_id=mid,
+            milestone_task_id=int(milestone_task_id) if milestone_task_id is not None else None,
+            task_title=task_title,
+        )
+    else:
+        new = inject_managed_milestone_status_block(raw, mid)
     if new == raw:
         return
     tmp = path.with_suffix(path.suffix + ".tmp")

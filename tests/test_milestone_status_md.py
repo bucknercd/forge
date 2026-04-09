@@ -5,6 +5,7 @@ import pytest
 from forge.cli import main
 from forge.milestone_status_md import (
     MilestoneStatusSyncError,
+    inject_managed_milestone_status_block,
     milestone_section_ranges,
     sync_milestones_md_for_completed_prompt_task,
     update_milestones_md_for_task_completion,
@@ -88,21 +89,151 @@ def test_other_milestone_section_bytes_preserved():
     assert second_before == second_after
 
 
-def test_sync_skips_when_section_has_no_managed_block(tmp_path, monkeypatch):
+def test_sync_injects_managed_block_when_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Paths.refresh(tmp_path)
     Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
     Paths.MILESTONES_FILE.write_text(
-        "# Milestones\n\n## Milestone 1: X\n- **Objective**: O\n",
+        "# Milestones\n\n## Milestone 1: Generated slice\n"
+        "* **Objective**: O\n* **Scope**: S\n* **Validation**: V\n"
+        "\n## Milestone 2: Other\n* **Objective**: A\n* **Validation**: AV\n",
         encoding="utf-8",
     )
-    before = Paths.MILESTONES_FILE.read_text(encoding="utf-8")
+    save_prompt_task_state(
+        PromptTaskState(
+            version=1,
+            active_task_id=None,
+            tasks=[
+                PromptTask(
+                    id=1,
+                    title="Ship feature",
+                    objective="",
+                    status="completed",
+                    milestone_id=1,
+                    task_id=1,
+                ),
+            ],
+        )
+    )
     sync_milestones_md_for_completed_prompt_task(
         milestone_id=1,
         milestone_task_id=1,
-        task_title="t",
+        task_title="Ship feature",
     )
-    assert Paths.MILESTONES_FILE.read_text(encoding="utf-8") == before
+    text = Paths.MILESTONES_FILE.read_text(encoding="utf-8")
+    assert "<!-- FORGE:STATUS START -->" in text
+    assert "* [x] Ship feature" in text
+    assert "Status: completed" in text
+    assert "## Milestone 2: Other" in text
+    assert "* **Objective**: A" in text
+
+
+def test_inject_leaves_unrelated_milestone_bytes_unchanged(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    md = (
+        "# Milestones\n\n## Milestone 1: One\n"
+        "* **Objective**: O\n* **Scope**: S\n* **Validation**: V\n\n"
+        "## Milestone 2: Two\n"
+        "UNIQUE_LINE_PRESERVED\n"
+        "* **Objective**: O2\n* **Validation**: V2\n"
+    )
+    Paths.MILESTONES_FILE.write_text(md, encoding="utf-8")
+    marker = "## Milestone 2: Two"
+    tail_before = md[md.index(marker) :]
+    save_prompt_task_state(
+        PromptTaskState(
+            version=1,
+            active_task_id=None,
+            tasks=[
+                PromptTask(
+                    id=1,
+                    title="Only m1",
+                    objective="",
+                    status="completed",
+                    milestone_id=1,
+                    task_id=1,
+                ),
+            ],
+        )
+    )
+    sync_milestones_md_for_completed_prompt_task(
+        milestone_id=1,
+        milestone_task_id=1,
+        task_title="Only m1",
+    )
+    after = Paths.MILESTONES_FILE.read_text(encoding="utf-8")
+    tail_after = after[after.index(marker) :]
+    assert tail_before == tail_after
+
+
+def test_existing_block_updates_checkbox_only_not_full_reinject(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    Paths.MILESTONES_FILE.write_text(
+        "# Milestones\n\n## Milestone 1: M\n"
+        "* **Objective**: O\n* **Scope**: S\n* **Validation**: V\n\n"
+        "Status: in progress\n\n"
+        "<!-- FORGE:STATUS START -->\n\n"
+        "* [x] Alpha\n"
+        "* [ ] Beta\n\n"
+        "<!-- FORGE:STATUS END -->\n",
+        encoding="utf-8",
+    )
+    sync_milestones_md_for_completed_prompt_task(
+        milestone_id=1,
+        milestone_task_id=2,
+        task_title="Beta",
+    )
+    text = Paths.MILESTONES_FILE.read_text(encoding="utf-8")
+    assert text.count("<!-- FORGE:STATUS START -->") == 1
+    assert "* [x] Alpha" in text
+    assert "* [x] Beta" in text
+    assert "Status: completed" in text
+
+
+def test_inject_pure_string_multi_task_in_progress(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    Paths.SYSTEM_DIR.mkdir(parents=True, exist_ok=True)
+    save_prompt_task_state(
+        PromptTaskState(
+            version=1,
+            active_task_id=None,
+            tasks=[
+                PromptTask(
+                    id=1,
+                    title="First",
+                    objective="",
+                    status="completed",
+                    milestone_id=1,
+                    task_id=1,
+                ),
+                PromptTask(
+                    id=2,
+                    title="Second",
+                    objective="",
+                    status="pending",
+                    milestone_id=1,
+                    task_id=2,
+                ),
+            ],
+        )
+    )
+    md = (
+        "# Milestones\n\n## Milestone 1: X\n"
+        "* **Objective**: O\n* **Scope**: S\n* **Validation**: Done\n"
+    )
+    out = inject_managed_milestone_status_block(md, milestone_id=1)
+    assert "Status: in progress" in out
+    assert "* [x] First" in out
+    assert "* [ ] Second" in out
+    assert "<!-- FORGE:STATUS START -->" in out
 
 
 def test_missing_managed_block_raises():
