@@ -126,7 +126,9 @@ For **`forge build --from-vision`**, put your product vision in `docs/vision.txt
 
 ### LLM policy and credentials (for `forge build`)
 
-Create `forge-policy.json`:
+Set `planner.mode` to `"llm"` and choose a provider with `planner.llm_client` (`openai`, `anthropic`, or `stub` for offline tests). **`forge doctor`** checks the API key that matches your configured client.
+
+**OpenAI** — `forge-policy.json`:
 
 ```json
 {
@@ -138,13 +140,35 @@ Create `forge-policy.json`:
 }
 ```
 
-Set credentials:
-
 ```bash
 export FORGE_OPENAI_API_KEY="sk-..."
 # or
 export OPENAI_API_KEY="sk-..."
 ```
+
+Optional: `FORGE_OPENAI_BASE_URL` if you use a compatible API endpoint.
+
+**Anthropic** — `forge-policy.json`:
+
+This uses Anthropic's API (Claude family models); `llm_client` stays `anthropic` to match the API and environment variables.
+
+```json
+{
+  "planner": {
+    "mode": "llm",
+    "llm_client": "anthropic",
+    "llm_model": "claude-3-5-sonnet-20241022"
+  }
+}
+```
+
+```bash
+export FORGE_ANTHROPIC_API_KEY="sk-ant-..."
+# or
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Optional: `FORGE_ANTHROPIC_BASE_URL` (default `https://api.anthropic.com`).
 
 Then:
 

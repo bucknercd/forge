@@ -811,7 +811,7 @@ def resolve_docs_llm_client() -> tuple[LLMClient | None, str | None]:
         return None, (
             "Vertical slice LLM docs (--idea, --vision-file, --from-vision) require "
             "planner.llm_client in forge-policy.json "
-            "(e.g. 'openai' with API key, or 'stub' for offline testing)."
+            "(e.g. 'openai' or 'anthropic' with API key, or 'stub' for offline testing)."
         )
     return resolve_llm_client_from_policy(policy)
 

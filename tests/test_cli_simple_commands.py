@@ -51,6 +51,35 @@ def test_cli_doctor_runs_without_full_project(tmp_path, monkeypatch, capsys):
     assert "Forge doctor" in out
 
 
+def test_cli_doctor_reports_anthropic_key_status(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    Paths.refresh(tmp_path)
+    (tmp_path / "forge-policy.json").write_text(
+        json.dumps(
+            {
+                "planner": {
+                    "mode": "llm",
+                    "llm_client": "anthropic",
+                    "llm_model": "claude-3-5-sonnet-20241022",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("FORGE_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr("sys.argv", ["forge", "doctor"])
+    assert main() == 0
+    out = capsys.readouterr().out
+    assert "Anthropic API key: not set" in out
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr("sys.argv", ["forge", "doctor"])
+    assert main() == 0
+    out2 = capsys.readouterr().out
+    assert "Anthropic API key: set" in out2
+
+
 def test_build_from_vision_stops_before_apply_and_only_prepares_planning_artifacts(
     tmp_path, monkeypatch, capsys
 ):

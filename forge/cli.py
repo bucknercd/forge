@@ -37,6 +37,8 @@ from forge.policy_config import (
 )
 from forge.planner import DeterministicPlanner
 from forge.planner_resolver import resolve_planner
+from forge.llm_anthropic import anthropic_api_key_from_env
+from forge.llm_openai import openai_api_key_from_env
 from forge.llm_resolve import resolve_llm_client_from_policy
 from forge.task_plan_synthesis import task_has_nonempty_embedded_forge_actions
 from forge.milestone_synthesis import (
@@ -292,10 +294,26 @@ class ForgeCLI:
                     f"model={pp.llm_model!r}"
                 )
                 if pp.mode == "llm" and pp.llm_client == "openai":
-                    if os.environ.get("OPENAI_API_KEY"):
-                        print("  OPENAI_API_KEY: set")
+                    if openai_api_key_from_env():
+                        print("  OpenAI API key: set (FORGE_OPENAI_API_KEY or OPENAI_API_KEY)")
                     else:
-                        print("  OPENAI_API_KEY: not set (required for openai client)")
+                        print(
+                            "  OpenAI API key: not set "
+                            "(set FORGE_OPENAI_API_KEY or OPENAI_API_KEY for openai client)"
+                        )
+                elif pp.mode == "llm" and pp.llm_client == "anthropic":
+                    if anthropic_api_key_from_env():
+                        print(
+                            "  Anthropic API key: set "
+                            "(FORGE_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY)"
+                        )
+                    else:
+                        print(
+                            "  Anthropic API key: not set "
+                            "(set FORGE_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY)"
+                        )
+                elif pp.mode == "llm" and pp.llm_client == "stub":
+                    print("  LLM stub: no API key required")
         else:
             print("- forge-policy.json: missing (defaults used; LLM needs explicit policy)")
         if Paths.MILESTONES_FILE.exists():

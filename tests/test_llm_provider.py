@@ -5,6 +5,7 @@ import json
 import pytest
 
 from forge.llm import StubLLMClient
+from forge.llm_anthropic import AnthropicMessagesClient, parse_messages_response
 from forge.llm_openai import OpenAIChatClient, parse_chat_completions_response
 from forge.llm_resolve import resolve_llm_client_from_policy
 from forge.planner import LLMPlanner
@@ -42,6 +43,33 @@ def test_resolve_openai_with_key(monkeypatch):
     assert client._model == "custom-model"
 
 
+def test_resolve_anthropic_missing_credentials(monkeypatch):
+    monkeypatch.delenv("FORGE_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    policy = PlannerPolicy(mode="llm", llm_client="anthropic", llm_model="claude-3-5-sonnet-20241022")
+    client, err = resolve_llm_client_from_policy(policy)
+    assert client is None
+    assert err is not None
+    assert "ANTHROPIC" in err or "anthropic" in err.lower()
+
+
+def test_resolve_anthropic_with_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    policy = PlannerPolicy(mode="llm", llm_client="anthropic", llm_model="claude-custom")
+    client, err = resolve_llm_client_from_policy(policy)
+    assert err is None
+    assert isinstance(client, AnthropicMessagesClient)
+    assert client._model == "claude-custom"
+
+
+def test_resolve_rejects_unknown_client_via_resolve():
+    policy = PlannerPolicy(mode="llm", llm_client="azure", llm_model="x")
+    client, err = resolve_llm_client_from_policy(policy)
+    assert client is None
+    assert err is not None
+    assert "Unsupported" in err
+
+
 def test_openai_malformed_api_json():
     with pytest.raises(ValueError) as exc:
         parse_chat_completions_response(b"not json")
@@ -52,6 +80,27 @@ def test_openai_malformed_api_missing_choices():
     with pytest.raises(ValueError) as exc:
         parse_chat_completions_response(json.dumps({"foo": 1}).encode())
     assert "choices" in str(exc.value).lower()
+
+
+def test_anthropic_malformed_api_json():
+    with pytest.raises(ValueError) as exc:
+        parse_messages_response(b"not json")
+    assert "json" in str(exc.value).lower()
+
+
+def test_anthropic_http_error_message():
+    def fail_post(url, headers, body):
+        return 401, b'{"type":"error","error":{"message":"bad key"}}'
+
+    c = AnthropicMessagesClient(
+        model="m",
+        api_key="k",
+        base_url="https://api.anthropic.com",
+        request_fn=fail_post,
+    )
+    with pytest.raises(RuntimeError) as exc:
+        c.generate("hi")
+    assert "401" in str(exc.value)
 
 
 def test_openai_http_error_message():
@@ -155,6 +204,51 @@ def test_openai_successful_plan_via_mock_request(tmp_path, monkeypatch):
         model="fake",
         api_key="fake",
         base_url="https://example.invalid",
+        request_fn=ok_post,
+    )
+    plan = LLMPlanner(client).build_plan(milestone)
+    assert len(plan.actions) == 2
+
+
+def test_anthropic_successful_plan_via_mock_request(tmp_path, monkeypatch):
+    plan_json = json.dumps(
+        {
+            "actions": [
+                "append_section requirements Overview | ANTHROPIC_MOCK",
+                "mark_milestone_completed",
+            ]
+        }
+    )
+
+    def ok_post(url, headers, body):
+        payload = {
+            "id": "msg_1",
+            "role": "assistant",
+            "content": [{"type": "text", "text": plan_json}],
+        }
+        return 200, json.dumps(payload).encode()
+
+    configure_project(
+        tmp_path,
+        """
+# Milestones
+
+## Milestone 1: Mock Anthropic
+- **Objective**: O
+- **Scope**: S
+- **Validation**: V
+""",
+    )
+    from forge.design_manager import MilestoneService
+
+    monkeypatch.chdir(tmp_path)
+    milestone = MilestoneService.get_milestone(1)
+    assert milestone is not None
+
+    client = AnthropicMessagesClient(
+        model="fake",
+        api_key="fake",
+        base_url="https://api.anthropic.com",
         request_fn=ok_post,
     )
     plan = LLMPlanner(client).build_plan(milestone)

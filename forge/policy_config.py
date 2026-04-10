@@ -20,7 +20,8 @@ class ReviewedApplyPolicy:
     test_output_max_chars: int = DEFAULT_TEST_OUTPUT_MAX_CHARS
 
 
-_LLM_CLIENT_IDS = frozenset({"stub", "openai"})
+# Valid planner.llm_client values (keep in sync with forge.llm_resolve).
+LLM_CLIENT_IDS = frozenset({"stub", "openai", "anthropic"})
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ class TaskExecutionPolicy:
 @dataclass(frozen=True)
 class PlannerPolicy:
     mode: str = "deterministic"  # deterministic | llm
-    llm_client: str | None = None  # stub | openai
+    llm_client: str | None = None  # stub | openai | anthropic
     llm_model: str | None = None  # non-secret model id for provider-backed clients
     require_review_for_nondeterministic: bool = False
 
@@ -114,9 +115,9 @@ def load_planner_policy() -> tuple[PlannerPolicy, str | None]:
     try:
         mode = _get_mode(section, "mode", default="deterministic")
         llm_client = _get_opt_str(section, "llm_client", default=None)
-        if llm_client is not None and llm_client not in _LLM_CLIENT_IDS:
+        if llm_client is not None and llm_client not in LLM_CLIENT_IDS:
             raise ValueError(
-                f"'llm_client' must be one of: {', '.join(sorted(_LLM_CLIENT_IDS))}."
+                f"'llm_client' must be one of: {', '.join(sorted(LLM_CLIENT_IDS))}."
             )
         llm_model = _get_opt_str(section, "llm_model", default=None)
         require_review = _get_bool(
